@@ -85,10 +85,13 @@ MVP 범위와 플레이테스트 계획 점검
 
 ### Progress state fields
 
-- `teamSize`
-- `timeBudget`
-- `featureList[]`
-- `testQuestions[]`
+- `team_composition`
+- `development_window_weeks`
+- `feature_list[]`
+- `mvp_goal`
+- `test_audience`
+- `playtest_hypothesis`
+- `playtest_questions[]`
 
 ## 7. Business Rules
 

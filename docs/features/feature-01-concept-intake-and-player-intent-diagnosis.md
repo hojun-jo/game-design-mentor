@@ -84,10 +84,11 @@
 
 ### Progress state fields
 
-- `targetPlayer`
-- `emotionGoal`
-- `conceptStatement`
-- `reviewFlags[]`
+- `target_player`
+- `emotion_goal`
+- `concept_statement`
+- `reference_titles[]`
+- `soft_missing_fields[]`
 
 ## 7. Business Rules
 

@@ -84,10 +84,10 @@
 
 ### Progress state fields
 
-- `observationNotes[]`
-- `dropOffPoints[]`
-- `playerQuotes[]`
-- `nextActions[]`
+- `observation_notes[]`
+- `drop_off_points[]`
+- `player_quotes[]`
+- `next_actions[]`
 
 ## 7. Business Rules
 

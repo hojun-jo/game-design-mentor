@@ -85,10 +85,10 @@
 
 ### Progress state fields
 
-- `coreLoopSteps[]`
-- `rewardHooks[]`
-- `differentiationPoints[]`
-- `reviewNotes[]`
+- `core_loop`
+- `reward_structure`
+- `differentiation_points[]`
+- `core_loop_diagnosis`
 
 ## 7. Business Rules
 
