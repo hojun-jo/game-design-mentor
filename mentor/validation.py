@@ -21,6 +21,26 @@ QUESTION_TEXT: Final[dict[str, str]] = {
     "feature_list": "이번 MVP에 꼭 필요한 기능 3개 안팎만 적어 주세요.",
 }
 
+QUESTION_LEARNING_GOAL: Final[dict[str, str]] = {
+    "intent_alignment": "대상 플레이어와 감정 목표를 같은 기준으로 묶기",
+    "target_player": "핵심 플레이어를 좁혀 뒤 리뷰의 기준 세우기",
+    "emotion_goal": "기능 설명과 감정 목표를 구분하기",
+    "core_loop": "반복 행동 흐름을 단계로 설명하기",
+    "reward_structure": "플레이어가 반복하는 이유를 보상과 기대 관점에서 보기",
+    "mvp_goal": "이번 MVP가 무엇을 증명해야 하는지 정하기",
+    "feature_list": "핵심 검증에 필요한 기능과 주변 기능을 구분하기",
+}
+
+QUESTION_RATIONALE: Final[dict[str, str]] = {
+    "intent_alignment": "대상과 감정이 정해져야 코어 루프와 범위 판단의 기준이 흔들리지 않습니다.",
+    "target_player": "플레이어가 넓으면 좋은 기능과 빼야 할 기능을 구분하기 어렵습니다.",
+    "emotion_goal": "감정 목표는 어떤 루프와 보상이 필요한지 판단하는 기준입니다.",
+    "core_loop": "코어 루프가 보여야 기능 목록이 반복 재미를 돕는지 판단할 수 있습니다.",
+    "reward_structure": "보상 구조가 있어야 플레이어가 왜 한 번 더 반복하는지 볼 수 있습니다.",
+    "mvp_goal": "MVP 목표가 있어야 범위 축소가 단순 삭제가 아니라 검증 설계가 됩니다.",
+    "feature_list": "기능을 3개 안팎으로 좁히면 무엇을 먼저 테스트할지 선명해집니다.",
+}
+
 
 def is_missing(value: object) -> bool:
     if isinstance(value, str):
@@ -35,33 +55,47 @@ def build_clarifying_questions(
     soft_missing_fields: list[str],
 ) -> list[ClarifyingQuestion]:
     questions: list[ClarifyingQuestion] = []
+    covered_fields: set[str] = set()
 
-    if "target_player" in soft_missing_fields or "emotion_goal" in missing_fields:
+    if "target_player" in soft_missing_fields and "emotion_goal" in missing_fields:
         questions.append(
             ClarifyingQuestion(
                 field="intent_alignment",
-                priority="hard" if "emotion_goal" in missing_fields else "soft",
+                priority="hard",
                 question="어떤 플레이어에게 어떤 감정을 주고 싶나요?",
+                question_type="clarify",
+                learning_goal=QUESTION_LEARNING_GOAL["intent_alignment"],
+                rationale=QUESTION_RATIONALE["intent_alignment"],
+                blocks_review=True,
             )
         )
+        covered_fields.update({"target_player", "emotion_goal"})
 
     for field in ("emotion_goal", "core_loop"):
-        if field in missing_fields:
+        if field in missing_fields and field not in covered_fields:
             questions.append(
                 ClarifyingQuestion(
                     field=field,
                     priority="hard",
                     question=QUESTION_TEXT[field],
+                    question_type="clarify",
+                    learning_goal=QUESTION_LEARNING_GOAL[field],
+                    rationale=QUESTION_RATIONALE[field],
+                    blocks_review=True,
                 )
             )
 
     for field in ("target_player", "reward_structure", "mvp_goal", "feature_list"):
-        if field in soft_missing_fields:
+        if field in soft_missing_fields and field not in covered_fields:
             questions.append(
                 ClarifyingQuestion(
                     field=field,
                     priority="soft",
                     question=QUESTION_TEXT[field],
+                    question_type="clarify",
+                    learning_goal=QUESTION_LEARNING_GOAL[field],
+                    rationale=QUESTION_RATIONALE[field],
+                    blocks_review=False,
                 )
             )
 
@@ -82,7 +116,7 @@ def validate_required_fields(state: MentorState) -> ValidationResult:
             missing_fields=missing_fields,
             soft_missing_fields=soft_missing_fields,
         ),
-        review_ready=not missing_fields,
+        review_ready=not missing_fields and not soft_missing_fields,
     )
 
 

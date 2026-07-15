@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import streamlit as st
 
-from mentor.models import ReviewResponse
+from mentor.models import ChatMessage, ReviewResponse
 
 
 def init_session_state() -> None:
     st.session_state.setdefault("review_result", None)
     st.session_state.setdefault("source_text", "")
+    st.session_state.setdefault("conversation_messages", [])
+    st.session_state.setdefault("intake_chat_messages", [])
+    st.session_state.setdefault("review_chat_messages", [])
+    st.session_state.setdefault("clarifying_chat_messages", [])
+    st.session_state.setdefault("clarifying_chat_source", "")
+    st.session_state.setdefault("review_chat_source", "")
 
 
 def get_raw_input(text_input: str, uploaded_file) -> str | None:
@@ -28,36 +34,79 @@ def get_raw_input(text_input: str, uploaded_file) -> str | None:
     return None
 
 
-def render_brief(result: ReviewResponse) -> None:
-    st.subheader("구조화 브리프")
+def render_rationale(title: str, rationales: list[str]) -> None:
+    if not rationales:
+        return
+    st.markdown(f"**{title}**")
+    for rationale in rationales:
+        st.write(f"- {rationale}")
+
+
+def render_brief(result: ReviewResponse, show_heading: bool = True) -> None:
+    if show_heading:
+        st.subheader("구조화 브리프")
     if result.soft_missing_fields:
         st.caption("권장 입력이 비어 있습니다: " + ", ".join(result.soft_missing_fields))
     st.json(result.brief.model_dump())
 
 
-def render_clarifying_mode(result: ReviewResponse) -> tuple[bool, dict[str, str]]:
+def render_clarifying_mode(result: ReviewResponse) -> None:
     st.error("본 리뷰 전에 먼저 확인할 정보가 있습니다.")
 
     if result.missing_fields:
         st.caption("리뷰를 막는 핵심 누락: " + ", ".join(result.missing_fields))
     if result.soft_missing_fields:
-        st.caption("같이 보완하면 더 정확해지는 항목: " + ", ".join(result.soft_missing_fields))
+        st.caption("리뷰 전에 확인할 권장 입력: " + ", ".join(result.soft_missing_fields))
 
-    st.subheader("보완 질문")
-    with st.form("clarify_form"):
-        for question in result.questions:
-            st.text_area(
-                f"[{question.priority}] {question.question}",
-                key=f"clarify_{question.field}",
-                height=90,
-            )
-        submitted = st.form_submit_button("답변 반영 후 다시 리뷰", type="primary")
+    st.info("아래 보완 대화에서 답변하거나, 질문의 의미와 추천 방향을 물어보세요.")
 
-    answers = {
-        question.field: st.session_state.get(f"clarify_{question.field}", "")
-        for question in result.questions
-    }
-    return submitted, answers
+
+def render_chat_workspace(
+    title: str | None,
+    caption: str | None,
+    messages: list[ChatMessage],
+    form_key: str,
+    input_label: str,
+    placeholder: str,
+) -> str | None:
+    if title:
+        st.subheader(title)
+    if caption:
+        st.caption(caption)
+
+    for message in messages:
+        with st.chat_message(message.role):
+            st.write(message.content)
+
+    with st.form(form_key, clear_on_submit=True):
+        draft = st.text_area(
+            input_label,
+            placeholder=placeholder,
+            height=130,
+        )
+        submitted = st.form_submit_button("보내기", type="primary")
+
+    if not submitted or not draft.strip():
+        return None
+    return draft.strip()
+
+
+def render_clarifying_sidebar_context(result: ReviewResponse) -> None:
+    with st.sidebar:
+        st.header("보완 컨텍스트")
+        st.caption("본문 채팅에서 답변하거나 추천을 요청하세요.")
+
+        if result.questions:
+            with st.expander("확인 중인 질문", expanded=True):
+                for question in result.questions:
+                    st.markdown(f"**[{question.priority}] {question.question}**")
+                    if question.learning_goal:
+                        st.caption(f"학습 목표: {question.learning_goal}")
+                    if question.rationale:
+                        st.caption(f"왜 묻나요: {question.rationale}")
+
+        with st.expander("구조화 브리프", expanded=False):
+            render_brief(result, show_heading=False)
 
 
 def render_reviewed_mode(result: ReviewResponse) -> None:
@@ -92,9 +141,26 @@ def render_reviewed_mode(result: ReviewResponse) -> None:
                         st.caption(citation.snippet)
 
     st.subheader("짧은 진단")
+    if result.learning.principles:
+        st.markdown("**이번 리뷰의 판단 기준**")
+        for principle in result.learning.principles:
+            st.write(f"- {principle}")
+
     st.markdown(f"**의도 정렬**\n\n{result.diagnosis.intent}")
+    render_rationale("근거", result.diagnosis.intent_rationale)
     st.markdown(f"**코어 루프**\n\n{result.diagnosis.core_loop}")
+    render_rationale("근거", result.diagnosis.core_loop_rationale)
     st.markdown(f"**범위와 테스트**\n\n{result.diagnosis.scope}")
+    render_rationale("근거", result.diagnosis.scope_rationale)
+
+    if result.questions:
+        st.subheader("스스로 점검할 질문")
+        for question in result.questions:
+            st.markdown(f"**{question.question}**")
+            if question.learning_goal:
+                st.caption(f"학습 목표: {question.learning_goal}")
+            if question.rationale:
+                st.caption(f"질문 이유: {question.rationale}")
 
     st.subheader("해석 방향 2개")
     for index, direction in enumerate(result.directions, start=1):
@@ -103,6 +169,7 @@ def render_reviewed_mode(result: ReviewResponse) -> None:
         st.write(f"트레이드오프: {direction.tradeoff}")
 
     st.subheader("MVP 범위 제안")
+    render_rationale("근거", result.scope.rationale)
     if result.scope.recommendations:
         for item in result.scope.recommendations:
             st.write(f"- {item}")
@@ -111,10 +178,49 @@ def render_reviewed_mode(result: ReviewResponse) -> None:
 
     st.subheader("플레이테스트 계획")
     st.write(f"가설: {result.playtest_plan.hypothesis}")
+    render_rationale("근거", result.playtest_plan.rationale)
     if result.playtest_plan.target_audience:
         st.write(f"테스트 대상: {result.playtest_plan.target_audience}")
     for question in result.playtest_plan.questions:
         st.write(f"- {question}")
 
+    if result.learning.reflection_summary or result.learning.next_self_check_question:
+        st.subheader("학습 요약")
+        if result.learning.reflection_summary:
+            st.write(result.learning.reflection_summary)
+        if result.learning.next_self_check_question:
+            st.info(result.learning.next_self_check_question)
+
     st.subheader("지금 먼저 정할 것")
     st.info(result.final_summary)
+
+
+def render_review_sidebar_context(result: ReviewResponse) -> None:
+    with st.sidebar:
+        st.header("리뷰 요약")
+        st.caption("본문 채팅에서 리뷰에 대해 질문하거나 정정하세요.")
+
+        if result.final_summary:
+            st.markdown("**먼저 정할 것**")
+            st.info(result.final_summary)
+
+        with st.expander("핵심 진단", expanded=True):
+            if result.diagnosis.intent:
+                st.markdown("**의도 정렬**")
+                st.write(result.diagnosis.intent)
+            if result.diagnosis.core_loop:
+                st.markdown("**코어 루프**")
+                st.write(result.diagnosis.core_loop)
+            if result.diagnosis.scope:
+                st.markdown("**범위와 테스트**")
+                st.write(result.diagnosis.scope)
+
+        if result.directions:
+            with st.expander("해석 방향", expanded=False):
+                for index, direction in enumerate(result.directions, start=1):
+                    st.markdown(f"**{index}. {direction.title}**")
+                    if direction.tradeoff:
+                        st.caption(direction.tradeoff)
+
+        with st.expander("구조화 브리프", expanded=False):
+            render_brief(result, show_heading=False)

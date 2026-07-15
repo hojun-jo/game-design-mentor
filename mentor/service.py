@@ -1,32 +1,61 @@
 from __future__ import annotations
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage
 
-from .graph import get_review_graph, route_after_validation
+from .graph import get_review_graph
 from .models import (
-    ClarifyingQuestion,
+    ChatMessage,
     DiagnosisResult,
+    LearningResult,
     MentorState,
     PlaytestPlan,
     ReviewResponse,
     ScopeResult,
 )
-from .reference_tools import merge_reference_lookup_results
-from .reviewer import normalize_directions, normalize_playtest_questions, normalize_review_payload
+from .reviewer import (
+    classify_clarifying_follow_up,
+    classify_review_follow_up,
+    normalize_review_payload,
+)
 from .state_utils import brief_from_state, clean_text
-from .validation import build_clarifying_questions, validate_required_fields
 
 
-def _merge_clarifying_answers(
-    raw_input: str,
-    questions: list[ClarifyingQuestion],
-    answers: dict[str, str],
-) -> str:
-    lines = [raw_input.strip(), "", "Additional clarifications:"]
-    for question in questions:
-        answer = clean_text(answers.get(question.field, ""))
-        if answer:
-            lines.append(f"- {question.question} {answer}")
+def _review_context_for_chat(result: ReviewResponse) -> dict:
+    return {
+        "mode": result.mode,
+        "brief": result.brief.model_dump(),
+        "reference_summary": [
+            reference.model_dump() for reference in result.reference_summary
+        ],
+        "missing_fields": result.missing_fields,
+        "soft_missing_fields": result.soft_missing_fields,
+        "diagnosis": result.diagnosis.model_dump(),
+        "directions": [direction.model_dump() for direction in result.directions],
+        "scope": result.scope.model_dump(),
+        "playtest_plan": result.playtest_plan.model_dump(),
+        "learning": result.learning.model_dump(),
+        "mentor_questions": [question.model_dump() for question in result.questions],
+        "final_summary": result.final_summary,
+    }
+
+
+def _append_review_follow_up(raw_input: str, revision_note: str) -> str:
+    lines = [
+        raw_input.strip(),
+        "",
+        "Review follow-up corrections:",
+        f"- {revision_note}",
+    ]
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _append_clarifying_chat_update(raw_input: str, answer_note: str) -> str:
+    lines = [
+        raw_input.strip(),
+        "",
+        "Clarifying chat updates:",
+        f"- {answer_note}",
+    ]
     return "\n".join(line for line in lines if line).strip()
 
 
@@ -37,18 +66,25 @@ def _build_response(state: MentorState) -> ReviewResponse:
         if mode == "reviewed"
         else {
             "intent_diagnosis": "",
+            "intent_rationale": [],
             "core_loop_diagnosis": "",
+            "core_loop_rationale": [],
             "scope_diagnosis": "",
+            "scope_rationale": [],
+            "playtest_rationale": [],
+            "mentor_principles": [],
+            "mentor_questions": [],
             "scope_recommendations": [],
             "playtest_hypothesis": "",
             "playtest_questions": [],
             "direction_options": [],
+            "reflection_summary": "",
+            "next_self_check_question": "",
             "final_summary": "",
         }
     )
     return ReviewResponse(
         mode=mode,
-        questions=state.get("clarifying_questions", []),
         brief=brief_from_state(state),
         reference_summary=state.get("reference_contexts", []),
         reference_citations=state.get("reference_citations", []),
@@ -56,18 +92,33 @@ def _build_response(state: MentorState) -> ReviewResponse:
         reference_lookup_notes=state.get("reference_lookup_notes", []),
         diagnosis=DiagnosisResult(
             intent=normalized_review["intent_diagnosis"],
+            intent_rationale=normalized_review["intent_rationale"],
             core_loop=normalized_review["core_loop_diagnosis"],
+            core_loop_rationale=normalized_review["core_loop_rationale"],
             scope=normalized_review["scope_diagnosis"],
+            scope_rationale=normalized_review["scope_rationale"],
         ),
         directions=normalized_review["direction_options"],
         scope=ScopeResult(
             summary=normalized_review["scope_diagnosis"],
+            rationale=normalized_review["scope_rationale"],
             recommendations=normalized_review["scope_recommendations"],
         ),
         playtest_plan=PlaytestPlan(
             hypothesis=normalized_review["playtest_hypothesis"],
+            rationale=normalized_review["playtest_rationale"],
             questions=normalized_review["playtest_questions"],
             target_audience=state.get("test_audience", ""),
+        ),
+        learning=LearningResult(
+            principles=normalized_review["mentor_principles"],
+            reflection_summary=normalized_review["reflection_summary"],
+            next_self_check_question=normalized_review["next_self_check_question"],
+        ),
+        questions=(
+            state.get("clarifying_questions", [])
+            if mode == "clarifying"
+            else normalized_review["mentor_questions"]
         ),
         final_summary=normalized_review["final_summary"],
         missing_fields=state.get("missing_fields", []),
@@ -90,117 +141,48 @@ def run_brief_review(raw_input: str) -> ReviewResponse:
     return invoke_graph(state)
 
 
-def continue_brief_review(
-    raw_input: str,
-    questions: list[ClarifyingQuestion],
-    answers: dict[str, str],
-) -> ReviewResponse:
-    merged_input = _merge_clarifying_answers(raw_input, questions, answers)
-    state: MentorState = {
-        "raw_input": merged_input,
-        "messages": [
-            HumanMessage(content=raw_input.strip()),
-            AIMessage(content="\n".join(question.question for question in questions)),
-            HumanMessage(
-                content="\n".join(
-                    f"{question.field}: {clean_text(answers.get(question.field, ''))}"
-                    for question in questions
-                    if clean_text(answers.get(question.field, ""))
-                )
-            ),
-        ],
-    }
-    return invoke_graph(state)
+def answer_clarifying_chat(
+    result: ReviewResponse,
+    user_message: str,
+    chat_history: list[ChatMessage],
+) -> tuple[str, ReviewResponse | None]:
+    message = clean_text(user_message)
+    if not message:
+        raise ValueError("보완 질문에 대한 답변이나 질문을 입력해 주세요.")
 
-
-def _self_check() -> None:
-    questions = build_clarifying_questions(
-        missing_fields=["emotion_goal", "core_loop"],
-        soft_missing_fields=["target_player", "reward_structure"],
+    payload = classify_clarifying_follow_up(
+        brief_context=result.brief.model_dump(),
+        questions=result.questions,
+        chat_history=chat_history,
+        user_message=message,
     )
-    assert questions[0].question == "어떤 플레이어에게 어떤 감정을 주고 싶나요?"
-    assert questions[1].field == "emotion_goal"
-    assert questions[2].field == "core_loop"
+    if payload.action == "answer":
+        return payload.reply, None
 
-    validation = validate_required_fields(
-        {
-            "concept_statement": "짧은 세션 설산 생존 전략 게임",
-            "target_player": "",
-            "emotion_goal": "",
-            "core_loop": "",
-            "reward_structure": "",
-            "feature_list": [],
-            "mvp_goal": "",
-        }
+    refreshed = run_brief_review(
+        _append_clarifying_chat_update(result.raw_input, payload.answer_note)
     )
-    assert validation.review_ready is False
-    assert validation.missing_fields == ["emotion_goal", "core_loop"]
-    assert "target_player" in validation.soft_missing_fields
+    return payload.reply, refreshed
 
-    assert route_after_validation({"review_ready": False}) == "build_clarifying_response"
-    assert (
-        route_after_validation({"review_ready": True, "reference_titles": ["Hades"]})
-        == "reference_lookup_tool_node"
+
+def answer_review_chat(
+    result: ReviewResponse,
+    user_message: str,
+    chat_history: list[ChatMessage],
+) -> tuple[str, ReviewResponse | None]:
+    message = clean_text(user_message)
+    if not message:
+        raise ValueError("후속 질문이나 정정 내용을 입력해 주세요.")
+
+    payload = classify_review_follow_up(
+        review_context=_review_context_for_chat(result),
+        chat_history=chat_history,
+        user_message=message,
     )
-    assert (
-        route_after_validation({"review_ready": True, "reference_titles": []})
-        == "mark_reference_lookup_skipped"
+    if payload.action == "answer":
+        return payload.reply, None
+
+    refreshed = run_brief_review(
+        _append_review_follow_up(result.raw_input, payload.revision_note)
     )
-    assert get_review_graph() is not None
-
-    merged_input = _merge_clarifying_answers(
-        raw_input="짧은 세션 설산 생존 전략 게임",
-        questions=[
-            ClarifyingQuestion(
-                field="intent_alignment",
-                priority="hard",
-                question="어떤 플레이어에게 어떤 감정을 주고 싶나요?",
-            ),
-            ClarifyingQuestion(
-                field="core_loop",
-                priority="hard",
-                question="플레이어가 반복해서 하게 될 행동 흐름을 순서대로 적어 주세요.",
-            ),
-        ],
-        answers={
-            "intent_alignment": "전략 판단을 좋아하는 플레이어에게 불안하지만 한 턴 더 가고 싶은 긴장감을 주고 싶다.",
-            "core_loop": "정찰 -> 자원 선택 -> 날씨 리스크 버티기 -> 거점 복귀",
-        },
-    )
-    assert "Additional clarifications:" in merged_input
-    assert "정찰 -> 자원 선택 -> 날씨 리스크 버티기 -> 거점 복귀" in merged_input
-
-    merged_reference = merge_reference_lookup_results(
-        {
-            "messages": [
-                ToolMessage(
-                    content=(
-                        '{"title":"Hades","status":"ok","context":{"title":"Hades","matched_name":"Hades",'
-                        '"genre_tags":["로그라이크","액션"],"core_loop_summary":"전투와 성장 반복",'
-                        '"notable_positioning":"빠른 전투 로그라이크","source_notes":["OpenAI web search"],'
-                        '"confidence":"high"},"note":"","citations":[{"reference_title":"Hades",'
-                        '"url":"https://store.steampowered.com/app/1145360/Hades/","title":"Hades on Steam",'
-                        '"snippet":"Battle out of hell"}]}'
-                    ),
-                    tool_call_id="reference-lookup-0",
-                    name="lookup_reference_game",
-                )
-            ]
-        }
-    )
-    assert merged_reference["reference_lookup_status"] == "ok"
-    assert len(merged_reference["reference_contexts"]) == 1
-    assert len(merged_reference["reference_citations"]) == 1
-
-    directions = normalize_directions([])
-    assert len(directions) == 2
-
-    playtest_questions = normalize_playtest_questions(
-        [],
-        {"core_loop": "탐험", "emotion_goal": "긴장감"},
-    )
-    assert len(playtest_questions) >= 2
-
-
-if __name__ == "__main__":
-    _self_check()
+    return payload.reply, refreshed

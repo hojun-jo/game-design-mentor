@@ -4,11 +4,16 @@ import json
 
 from .llm import get_reviewer_base_llm
 from .models import (
+    ChatMessage,
+    ClarifyingChatPayload,
+    ClarifyingQuestion,
     CoreLoopReviewPayload,
     DirectionComparePayload,
     DirectionOption,
     IntentReviewPayload,
+    LearningSummaryPayload,
     MentorState,
+    ReviewChatPayload,
     ScopePlaytestPayload,
 )
 from .state_utils import clean_text, normalize_string_list, serialize_brief_for_prompt
@@ -78,6 +83,110 @@ def normalize_playtest_questions(
     return normalized[:3]
 
 
+def normalize_mentor_principles(values: list[str]) -> list[str]:
+    return normalize_string_list(values)[:3]
+
+
+def fallback_rationale(section: str) -> list[str]:
+    fallbacks = {
+        "intent": [
+            "대상 플레이어, 감정 목표, 콘셉트가 같은 플레이 경험을 가리키는지 기준으로 판단했습니다.",
+            "입력된 브리프에서 비어 있거나 넓게 표현된 항목은 진단의 불확실성으로 반영했습니다.",
+        ],
+        "core_loop": [
+            "반복 행동, 피드백, 보상, 다음 선택이 서로 이어지는지 기준으로 판단했습니다.",
+            "기능 목록이 코어 루프를 강화하는지, 아니면 주변 기능으로 흩어지는지 함께 보았습니다.",
+        ],
+        "scope": [
+            "핵심 루프 검증에 직접 필요한 기능인지 기준으로 범위 우선순위를 판단했습니다.",
+            "개발 기간, 팀 구성, MVP 목표가 비어 있으면 보수적인 1인 MVP 가정으로 판단했습니다.",
+        ],
+        "playtest": [
+            "플레이어의 말보다 관찰 가능한 선택과 행동으로 검증할 수 있는지 기준으로 판단했습니다.",
+            "플레이테스트 질문이 MVP 가설과 직접 연결되는지 확인했습니다.",
+        ],
+    }
+    return fallbacks[section]
+
+
+def normalize_rationale(value: str | list[str], section: str) -> list[str]:
+    if isinstance(value, str):
+        normalized = normalize_string_list([value])
+    else:
+        normalized = normalize_string_list(value)
+    if len(normalized) >= 2:
+        return normalized[:3]
+    for fallback in fallback_rationale(section):
+        if fallback not in normalized:
+            normalized.append(fallback)
+        if len(normalized) >= 2:
+            break
+    return normalized[:3]
+
+
+def normalize_mentor_questions(
+    questions: list[ClarifyingQuestion | dict],
+) -> list[ClarifyingQuestion]:
+    normalized: list[ClarifyingQuestion] = []
+    for question in questions:
+        if isinstance(question, dict):
+            question = ClarifyingQuestion.model_validate(question)
+        text = clean_text(question.question)
+        if not text:
+            continue
+        normalized.append(
+            ClarifyingQuestion(
+                field=clean_text(question.field) or "reflection",
+                priority=question.priority,
+                question=text,
+                question_type=question.question_type,
+                learning_goal=clean_text(question.learning_goal),
+                rationale=clean_text(question.rationale),
+                blocks_review=question.blocks_review,
+            )
+        )
+        if len(normalized) >= 3:
+            break
+    return normalized
+
+
+def merge_mentor_principles(
+    state: MentorState,
+    new_principles: list[str],
+) -> list[str]:
+    return normalize_mentor_principles(
+        [*state.get("mentor_principles", []), *new_principles]
+    )
+
+
+def merge_mentor_questions(
+    state: MentorState,
+    new_questions: list[ClarifyingQuestion | dict],
+) -> list[ClarifyingQuestion]:
+    return normalize_mentor_questions(
+        [*state.get("mentor_questions", []), *new_questions]
+    )
+
+
+def merge_review_guidance(state: MentorState) -> dict:
+    return {
+        "mentor_principles": normalize_mentor_principles(
+            [
+                *state.get("intent_mentor_principles", []),
+                *state.get("core_loop_mentor_principles", []),
+                *state.get("scope_mentor_principles", []),
+            ]
+        ),
+        "mentor_questions": normalize_mentor_questions(
+            [
+                *state.get("intent_mentor_questions", []),
+                *state.get("core_loop_mentor_questions", []),
+                *state.get("scope_mentor_questions", []),
+            ]
+        ),
+    }
+
+
 def _get_structured_reviewer(schema):
     return get_reviewer_base_llm().with_structured_output(schema)
 
@@ -98,6 +207,10 @@ Rules:
 - If `target_player` is missing, acknowledge that uncertainty directly.
 - If `reference_lookup_status` is not `ok`, mention briefly that reference comparison was limited.
 - `intent_diagnosis` should be a short paragraph of 2-3 sentences.
+- `intent_rationale` must contain 2-3 concrete evidence bullets. Each bullet must point to a specific input, missing input, contradiction, or reference comparison used for the diagnosis.
+- Return 1 mentor principle explaining the design criterion used for intent alignment.
+- Return 1 non-blocking reflect question that helps the user check target/emotion alignment next time.
+- That question must use priority="soft", question_type="reflect", and blocks_review=false.
 
 Reference lookup:
 {json.dumps(
@@ -115,7 +228,14 @@ Structured brief:
 """.strip()
 
     review = _get_structured_reviewer(IntentReviewPayload).invoke(prompt)
-    return {"intent_diagnosis": clean_text(review.intent_diagnosis)}
+    return {
+        "intent_diagnosis": clean_text(review.intent_diagnosis),
+        "intent_rationale": normalize_rationale(review.intent_rationale, "intent"),
+        "intent_mentor_principles": normalize_mentor_principles(
+            review.mentor_principles
+        ),
+        "intent_mentor_questions": normalize_mentor_questions(review.mentor_questions),
+    }
 
 
 def generate_core_loop_review(state: MentorState) -> dict:
@@ -131,7 +251,11 @@ Rules:
 - Separate loop quality from feature listing.
 - Use observation before prescription.
 - If `reward_structure` is missing, acknowledge that uncertainty directly.
- - `core_loop_diagnosis` should be a short paragraph of 2-3 sentences.
+- `core_loop_diagnosis` should be a short paragraph of 2-3 sentences.
+- `core_loop_rationale` must contain 2-3 concrete evidence bullets. Each bullet must point to a specific loop step, reward cue, feature, missing input, or reference comparison used for the diagnosis.
+- Return 1 mentor principle explaining how to judge loop/reward causality.
+- Return 1 non-blocking reflect question about the player's repeated choice.
+- That question must use priority="soft", question_type="reflect", and blocks_review=false.
 
 Reference lookup:
 {json.dumps(_jsonable_list(state.get("reference_contexts", [])), ensure_ascii=False, indent=2)}
@@ -141,7 +265,19 @@ Structured brief:
 """.strip()
 
     review = _get_structured_reviewer(CoreLoopReviewPayload).invoke(prompt)
-    return {"core_loop_diagnosis": clean_text(review.core_loop_diagnosis)}
+    return {
+        "core_loop_diagnosis": clean_text(review.core_loop_diagnosis),
+        "core_loop_rationale": normalize_rationale(
+            review.core_loop_rationale,
+            "core_loop",
+        ),
+        "core_loop_mentor_principles": normalize_mentor_principles(
+            review.mentor_principles
+        ),
+        "core_loop_mentor_questions": normalize_mentor_questions(
+            review.mentor_questions
+        ),
+    }
 
 
 def generate_scope_playtest_review(state: MentorState) -> dict:
@@ -156,9 +292,14 @@ Rules:
 - If scope inputs are missing, make conservative assumptions and say so directly.
 - If reference lookup failed, you may mention that reference-based calibration was limited, but continue the review.
 - `scope_diagnosis` should be a short paragraph of 2-3 sentences.
+- `scope_rationale` must contain 2-3 concrete evidence bullets. Each bullet must point to specific scope inputs, feature list items, missing constraints, or MVP goal evidence.
 - `scope_recommendations` should be concrete cut-or-delay suggestions.
 - `playtest_hypothesis` should be a single concrete hypothesis.
 - `playtest_questions` should be observable player-behavior questions.
+- `playtest_rationale` must contain 2-3 concrete evidence bullets explaining why the hypothesis and questions fit the brief.
+- Return 1 mentor principle explaining scope as a learning hypothesis.
+- Return 1 non-blocking reflect question about what the MVP must teach first.
+- That question must use priority="soft", question_type="reflect", and blocks_review=false.
 
 Structured brief:
 {serialize_brief_for_prompt(state)}
@@ -167,6 +308,15 @@ Structured brief:
     review = _get_structured_reviewer(ScopePlaytestPayload).invoke(prompt)
     return {
         "scope_diagnosis": clean_text(review.scope_diagnosis),
+        "scope_rationale": normalize_rationale(review.scope_rationale, "scope"),
+        "playtest_rationale": normalize_rationale(
+            review.playtest_rationale,
+            "playtest",
+        ),
+        "scope_mentor_principles": normalize_mentor_principles(
+            review.mentor_principles
+        ),
+        "scope_mentor_questions": normalize_mentor_questions(review.mentor_questions),
         "scope_recommendations": normalize_string_list(review.scope_recommendations),
         "playtest_hypothesis": clean_text(review.playtest_hypothesis),
         "playtest_questions": normalize_playtest_questions(review.playtest_questions, state),
@@ -184,6 +334,7 @@ Rules:
 - Use the existing diagnoses and playtest hypothesis to propose exactly 2 direction options.
 - Each direction option needs a short title, one-sentence reason, and one-sentence tradeoff.
 - Make the two directions meaningfully different.
+- Use `mentor_principles` as the decision criteria.
 - `final_summary` must be one sentence about what to decide first.
 
 Diagnoses:
@@ -194,6 +345,7 @@ Diagnoses:
         "scope_diagnosis": state.get("scope_diagnosis", ""),
         "scope_recommendations": state.get("scope_recommendations", []),
         "playtest_hypothesis": state.get("playtest_hypothesis", ""),
+        "mentor_principles": state.get("mentor_principles", []),
         "reference_contexts": _jsonable_list(state.get("reference_contexts", [])),
         "reference_lookup_status": state.get("reference_lookup_status", "skipped"),
     },
@@ -212,11 +364,183 @@ Structured brief:
     }
 
 
+def build_learning_summary(state: MentorState) -> dict:
+    prompt = f"""
+You are a rigorous but practical game design mentor for beginner indie developers.
+Write in Korean and keep it concise.
+
+Focus only on learning transfer.
+
+Rules:
+- `reflection_summary` should say what became clearer through this review in 1-2 sentences.
+- `next_self_check_question` should be one reusable question the user can ask on their next game brief.
+- `final_summary` should be one sentence about what to decide first.
+- Do not introduce new product recommendations.
+
+Review context:
+{json.dumps(
+    {
+        "intent_diagnosis": state.get("intent_diagnosis", ""),
+        "intent_rationale": state.get("intent_rationale", ""),
+        "core_loop_diagnosis": state.get("core_loop_diagnosis", ""),
+        "core_loop_rationale": state.get("core_loop_rationale", ""),
+        "scope_diagnosis": state.get("scope_diagnosis", ""),
+        "scope_rationale": state.get("scope_rationale", ""),
+        "mentor_principles": state.get("mentor_principles", []),
+        "mentor_questions": _jsonable_list(state.get("mentor_questions", [])),
+        "direction_options": _jsonable_list(state.get("direction_options", [])),
+        "final_summary": state.get("final_summary", ""),
+    },
+    ensure_ascii=False,
+    indent=2,
+)}
+
+Structured brief:
+{serialize_brief_for_prompt(state)}
+""".strip()
+
+    summary = _get_structured_reviewer(LearningSummaryPayload).invoke(prompt)
+    return {
+        "reflection_summary": clean_text(summary.reflection_summary),
+        "next_self_check_question": clean_text(summary.next_self_check_question),
+        "final_summary": clean_text(summary.final_summary)
+        or clean_text(state.get("final_summary", "")),
+    }
+
+
+def classify_review_follow_up(
+    review_context: dict,
+    chat_history: list[ChatMessage],
+    user_message: str,
+) -> ReviewChatPayload:
+    prompt = f"""
+You are a rigorous but practical game design mentor for beginner indie developers.
+Write in Korean and keep it concise.
+
+The user is chatting after receiving a game design review.
+Classify the latest user message and produce the next assistant response.
+
+Rules:
+- Use action="revise" only when the user corrects the brief, corrects your interpretation, adds missing design intent, or says the review misunderstood their game.
+- Use action="answer" when the user asks why the review said something, asks for examples, asks how to apply feedback, or asks a follow-up question without changing the brief.
+- If action="revise", `revision_note` must be a concise factual note that can be appended to the original brief before regenerating the review.
+- If action="revise", `reply` should briefly say the correction will be reflected and the review refreshed.
+- If action="answer", `reply` should answer from the current review context and mention uncertainty when the needed detail is absent.
+- Do not invent new game details.
+- Do not apologize unless there is a concrete mistake.
+
+Current review context:
+{json.dumps(review_context, ensure_ascii=False, indent=2)}
+
+Conversation history including intake, clarification, and review follow-up:
+{json.dumps(_jsonable_list(chat_history), ensure_ascii=False, indent=2)}
+
+Latest user message:
+{user_message}
+""".strip()
+
+    payload = _get_structured_reviewer(ReviewChatPayload).invoke(prompt)
+    action = payload.action if payload.action in {"answer", "revise"} else "answer"
+    reply = clean_text(payload.reply)
+    revision_note = clean_text(payload.revision_note)
+    if action == "revise" and not revision_note:
+        revision_note = clean_text(user_message)
+    if not reply:
+        if action == "revise":
+            reply = "정정 내용을 반영해 리뷰를 다시 갱신하겠습니다."
+        else:
+            reply = "현재 리뷰 근거만으로는 확정하기 어렵습니다. 어떤 부분을 더 보고 싶은지 알려 주세요."
+    return ReviewChatPayload(
+        action=action,
+        reply=reply,
+        revision_note=revision_note,
+    )
+
+
+def classify_clarifying_follow_up(
+    brief_context: dict,
+    questions: list[ClarifyingQuestion],
+    chat_history: list[ChatMessage],
+    user_message: str,
+) -> ClarifyingChatPayload:
+    prompt = f"""
+You are a rigorous but practical game design mentor for beginner indie developers.
+Write in Korean and keep it concise.
+
+The user is answering or asking about pre-review clarification questions.
+Classify the latest user message and produce the next assistant response.
+
+Rules:
+- Use action="continue_review" only when the user provides or confirms concrete brief information that can answer at least one pending clarification question.
+- Use action="answer" when the user asks what a question means, asks why it matters, asks for examples, asks for recommendations, or explores options without making a concrete choice.
+- If the user asks for a recommendation, give 2-3 options with tradeoffs, but do not treat those options as confirmed brief facts.
+- If action="continue_review", `answer_note` must contain only concise factual user-confirmed brief details. Do not include your recommendations unless the user explicitly chose them.
+- If action="continue_review", `reply` should briefly say the answer will be reflected and the review retried.
+- If action="answer", `reply` should help the user answer the pending questions and may include concrete examples or recommendations.
+- Never invent confirmed facts about the user's game.
+
+Current structured brief:
+{json.dumps(brief_context, ensure_ascii=False, indent=2)}
+
+Pending clarification questions:
+{json.dumps(_jsonable_list(questions), ensure_ascii=False, indent=2)}
+
+Clarifying chat so far:
+{json.dumps(_jsonable_list(chat_history), ensure_ascii=False, indent=2)}
+
+Latest user message:
+{user_message}
+""".strip()
+
+    payload = _get_structured_reviewer(ClarifyingChatPayload).invoke(prompt)
+    action = (
+        payload.action
+        if payload.action in {"answer", "continue_review"}
+        else "answer"
+    )
+    reply = clean_text(payload.reply)
+    answer_note = clean_text(payload.answer_note)
+    if action == "continue_review" and not answer_note:
+        answer_note = clean_text(user_message)
+    if not reply:
+        if action == "continue_review":
+            reply = "답변을 반영해 다시 구조화하고 리뷰 가능 여부를 확인하겠습니다."
+        else:
+            reply = "현재 보완 질문 중 어떤 항목이 막히는지 알려 주세요. 예시나 추천 방향을 제안할 수 있습니다."
+    return ClarifyingChatPayload(
+        action=action,
+        reply=reply,
+        answer_note=answer_note,
+    )
+
+
 def normalize_review_payload(state: MentorState) -> dict:
     return {
         "intent_diagnosis": clean_text(state.get("intent_diagnosis", "")),
+        "intent_rationale": normalize_rationale(
+            state.get("intent_rationale", ""),
+            "intent",
+        ),
         "core_loop_diagnosis": clean_text(state.get("core_loop_diagnosis", "")),
+        "core_loop_rationale": normalize_rationale(
+            state.get("core_loop_rationale", ""),
+            "core_loop",
+        ),
         "scope_diagnosis": clean_text(state.get("scope_diagnosis", "")),
+        "scope_rationale": normalize_rationale(
+            state.get("scope_rationale", ""),
+            "scope",
+        ),
+        "playtest_rationale": normalize_rationale(
+            state.get("playtest_rationale", ""),
+            "playtest",
+        ),
+        "mentor_principles": normalize_mentor_principles(
+            state.get("mentor_principles", [])
+        ),
+        "mentor_questions": normalize_mentor_questions(
+            state.get("mentor_questions", [])
+        ),
         "scope_recommendations": normalize_string_list(
             state.get("scope_recommendations", [])
         ),
@@ -226,5 +550,9 @@ def normalize_review_payload(state: MentorState) -> dict:
             state,
         ),
         "direction_options": normalize_directions(state.get("direction_options", [])),
+        "reflection_summary": clean_text(state.get("reflection_summary", "")),
+        "next_self_check_question": clean_text(
+            state.get("next_self_check_question", "")
+        ),
         "final_summary": clean_text(state.get("final_summary", "")),
     }
