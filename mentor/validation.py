@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from .models import ClarifyingQuestion, MentorState, ValidationResult
+from .models import ClarifyingQuestion, MentorState, StructuredBrief, ValidationResult
 
 HARD_REQUIRED_FIELDS: Final[tuple[str, ...]] = ("emotion_goal", "core_loop")
 SOFT_REQUIRED_FIELDS: Final[tuple[str, ...]] = (
@@ -40,6 +40,73 @@ QUESTION_RATIONALE: Final[dict[str, str]] = {
     "mvp_goal": "MVP 목표가 있어야 범위 축소가 단순 삭제가 아니라 검증 설계가 됩니다.",
     "feature_list": "기능을 3개 안팎으로 좁히면 무엇을 먼저 테스트할지 선명해집니다.",
 }
+
+GAME_DESIGN_KEYWORDS: Final[tuple[str, ...]] = (
+    "게임",
+    "game",
+    "플레이",
+    "플레이어",
+    "player",
+    "플레이테스트",
+    "playtest",
+    "코어 루프",
+    "core loop",
+    "루프",
+    "메커닉",
+    "mechanic",
+    "장르",
+    "genre",
+    "레벨",
+    "level",
+    "스테이지",
+    "stage",
+    "전투",
+    "combat",
+    "퀘스트",
+    "quest",
+    "퍼즐",
+    "puzzle",
+    "보상",
+    "reward",
+    "밸런스",
+    "balance",
+    "난이도",
+    "difficulty",
+    "조작",
+    "control",
+    "캐릭터",
+    "character",
+    "적",
+    "enemy",
+    "보스",
+    "boss",
+    "인벤토리",
+    "inventory",
+    "로그라이크",
+    "roguelike",
+    "rpg",
+    "전략",
+    "strategy",
+    "생존",
+    "survival",
+    "덱빌딩",
+    "deckbuilding",
+    "시뮬레이션",
+    "simulation",
+    "플랫포머",
+    "platformer",
+)
+
+GAME_BRIEF_FIELDS: Final[tuple[str, ...]] = (
+    "concept_statement",
+    "target_player",
+    "emotion_goal",
+    "core_loop",
+    "reward_structure",
+    "mvp_goal",
+    "test_audience",
+    "constraints_note",
+)
 
 
 def is_missing(value: object) -> bool:
@@ -100,6 +167,33 @@ def build_clarifying_questions(
             )
 
     return questions
+
+
+def is_game_design_related(raw_input: str, brief: StructuredBrief) -> bool:
+    text = " ".join(
+        [
+            raw_input,
+            *(getattr(brief, field) for field in GAME_BRIEF_FIELDS),
+            *brief.differentiation_points,
+            *brief.feature_list,
+            *brief.reference_titles,
+        ]
+    ).casefold()
+    if any(keyword in text for keyword in GAME_DESIGN_KEYWORDS):
+        return True
+
+    extracted_design_fields = [
+        brief.core_loop,
+        brief.reward_structure,
+        brief.mvp_goal,
+        brief.test_audience,
+        *brief.feature_list,
+        *brief.differentiation_points,
+        *brief.reference_titles,
+    ]
+    return bool(brief.concept_statement.strip()) and any(
+        str(value).strip() for value in extracted_design_fields
+    )
 
 
 def validate_required_fields(state: MentorState) -> ValidationResult:

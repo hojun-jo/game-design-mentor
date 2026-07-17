@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from mentor.validation import build_clarifying_questions, validate_required_fields
+from mentor.models import StructuredBrief
+from mentor.validation import (
+    build_clarifying_questions,
+    is_game_design_related,
+    validate_required_fields,
+)
 
 
 class ValidationTest(unittest.TestCase):
@@ -75,6 +80,31 @@ class ValidationTest(unittest.TestCase):
         self.assertIn("reward_structure", validation.soft_missing_fields)
         self.assertIn("feature_list", validation.soft_missing_fields)
         self.assertIn("mvp_goal", validation.soft_missing_fields)
+
+    def test_unrelated_input_is_not_game_design_related(self) -> None:
+        self.assertFalse(
+            is_game_design_related(
+                raw_input="이번 분기 영업 보고서와 채용 계획을 정리한 문서입니다.",
+                brief=StructuredBrief(
+                    concept_statement="이번 분기 영업 보고서와 채용 계획",
+                ),
+            )
+        )
+
+    def test_game_brief_without_game_word_is_related(self) -> None:
+        self.assertTrue(
+            is_game_design_related(
+                raw_input=(
+                    "짧은 세션의 설산 생존 전략 기획이다. "
+                    "불안하지만 한 턴만 더 하고 싶은 긴장감을 준다."
+                ),
+                brief=StructuredBrief(
+                    concept_statement="짧은 세션의 설산 생존 전략",
+                    emotion_goal="불안하지만 한 턴만 더 하고 싶은 긴장감",
+                    core_loop="정찰 -> 자원 선택 -> 날씨 리스크 버티기 -> 거점 복귀",
+                ),
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from .domain_classifier import ensure_game_design_domain
 from .llm import get_extractor_llm
+from .llm_stream import get_stream_config, report_structured_output
 from .models import MentorState
 from .state_utils import normalize_brief, raw_input_is_too_short, resolve_raw_input
 
@@ -48,5 +50,12 @@ User draft:
 {raw_input}
 """.strip()
 
-    extracted = get_extractor_llm().invoke(prompt)
-    return normalize_brief(extracted).model_dump()
+    config = get_stream_config("브리프 추출 중")
+    if config is None:
+        extracted = get_extractor_llm().invoke(prompt)
+    else:
+        extracted = get_extractor_llm().invoke(prompt, config=config)
+    report_structured_output("브리프 추출 중", extracted)
+    normalized = normalize_brief(extracted)
+    ensure_game_design_domain(raw_input, normalized)
+    return normalized.model_dump()

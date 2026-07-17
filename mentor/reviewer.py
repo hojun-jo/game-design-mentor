@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from .llm_stream import get_stream_config, report_structured_output
 from .llm import get_reviewer_base_llm
 from .models import (
     ChatMessage,
@@ -191,6 +192,17 @@ def _get_structured_reviewer(schema):
     return get_reviewer_base_llm().with_structured_output(schema)
 
 
+def _invoke_structured_reviewer(schema, prompt: str, title: str):
+    reviewer = _get_structured_reviewer(schema)
+    config = get_stream_config(title)
+    if config is None:
+        payload = reviewer.invoke(prompt)
+    else:
+        payload = reviewer.invoke(prompt, config=config)
+    report_structured_output(title, payload)
+    return payload
+
+
 def generate_intent_alignment_review(state: MentorState) -> dict:
     prompt = f"""
 You are a rigorous but practical game design mentor for beginner indie developers.
@@ -227,7 +239,11 @@ Structured brief:
 {serialize_brief_for_prompt(state)}
 """.strip()
 
-    review = _get_structured_reviewer(IntentReviewPayload).invoke(prompt)
+    review = _invoke_structured_reviewer(
+        IntentReviewPayload,
+        prompt,
+        "의도 정렬 리뷰 생성 중",
+    )
     return {
         "intent_diagnosis": clean_text(review.intent_diagnosis),
         "intent_rationale": normalize_rationale(review.intent_rationale, "intent"),
@@ -264,7 +280,11 @@ Structured brief:
 {serialize_brief_for_prompt(state)}
 """.strip()
 
-    review = _get_structured_reviewer(CoreLoopReviewPayload).invoke(prompt)
+    review = _invoke_structured_reviewer(
+        CoreLoopReviewPayload,
+        prompt,
+        "코어 루프 리뷰 생성 중",
+    )
     return {
         "core_loop_diagnosis": clean_text(review.core_loop_diagnosis),
         "core_loop_rationale": normalize_rationale(
@@ -305,7 +325,11 @@ Structured brief:
 {serialize_brief_for_prompt(state)}
 """.strip()
 
-    review = _get_structured_reviewer(ScopePlaytestPayload).invoke(prompt)
+    review = _invoke_structured_reviewer(
+        ScopePlaytestPayload,
+        prompt,
+        "MVP 범위와 플레이테스트 리뷰 생성 중",
+    )
     return {
         "scope_diagnosis": clean_text(review.scope_diagnosis),
         "scope_rationale": normalize_rationale(review.scope_rationale, "scope"),
@@ -357,7 +381,11 @@ Structured brief:
 {serialize_brief_for_prompt(state)}
 """.strip()
 
-    review = _get_structured_reviewer(DirectionComparePayload).invoke(prompt)
+    review = _invoke_structured_reviewer(
+        DirectionComparePayload,
+        prompt,
+        "해석 방향 비교 생성 중",
+    )
     return {
         "direction_options": normalize_directions(review.direction_options),
         "final_summary": clean_text(review.final_summary),
@@ -399,7 +427,11 @@ Structured brief:
 {serialize_brief_for_prompt(state)}
 """.strip()
 
-    summary = _get_structured_reviewer(LearningSummaryPayload).invoke(prompt)
+    summary = _invoke_structured_reviewer(
+        LearningSummaryPayload,
+        prompt,
+        "학습 요약 생성 중",
+    )
     return {
         "reflection_summary": clean_text(summary.reflection_summary),
         "next_self_check_question": clean_text(summary.next_self_check_question),
@@ -439,7 +471,11 @@ Latest user message:
 {user_message}
 """.strip()
 
-    payload = _get_structured_reviewer(ReviewChatPayload).invoke(prompt)
+    payload = _invoke_structured_reviewer(
+        ReviewChatPayload,
+        prompt,
+        "후속 답변 생성 중",
+    )
     action = payload.action if payload.action in {"answer", "revise"} else "answer"
     reply = clean_text(payload.reply)
     revision_note = clean_text(payload.revision_note)
@@ -492,7 +528,11 @@ Latest user message:
 {user_message}
 """.strip()
 
-    payload = _get_structured_reviewer(ClarifyingChatPayload).invoke(prompt)
+    payload = _invoke_structured_reviewer(
+        ClarifyingChatPayload,
+        prompt,
+        "보완 대화 답변 생성 중",
+    )
     action = (
         payload.action
         if payload.action in {"answer", "continue_review"}

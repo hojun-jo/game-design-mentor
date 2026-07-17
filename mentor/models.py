@@ -70,6 +70,12 @@ class StructuredBrief(BaseModel):
     reference_titles: list[str] = Field(default_factory=list)
 
 
+class DomainClassificationPayload(BaseModel):
+    is_game_design_related: bool = False
+    confidence: Literal["low", "medium", "high"] = "low"
+    reason: str = Field(default="")
+
+
 class ClarifyingQuestion(BaseModel):
     field: str
     priority: Literal["hard", "soft"]

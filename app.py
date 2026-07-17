@@ -130,6 +130,37 @@ def _build_clarifying_prompt(result: ReviewResponse) -> str:
     return "\n".join(lines).strip()
 
 
+def _make_activity_reporter(status):
+    last_message = ""
+
+    def report(message: str) -> None:
+        nonlocal last_message
+        if message == last_message:
+            return
+        last_message = message
+        st.write(message)
+        status.update(label=message, state="running", expanded=True)
+
+    return report
+
+
+def _make_generation_reporter():
+    placeholder = st.empty()
+    sections: dict[str, str] = {}
+
+    def report(title: str, content: str) -> None:
+        if not content.strip():
+            return
+        sections[title] = content.strip()
+        rendered_sections = [
+            f"**{section_title}**\n\n{section_content}"
+            for section_title, section_content in sections.items()
+        ]
+        placeholder.markdown("\n\n---\n\n".join(rendered_sections))
+
+    return report
+
+
 def _get_review_workspace_messages() -> list[ChatMessage]:
     return _get_conversation_messages()
 
@@ -155,12 +186,20 @@ def _ensure_review_chat_started(result: ReviewResponse) -> None:
 
 
 def _start_review_from_input(raw_input: str) -> None:
-    with st.spinner("기획 초안을 구조화하고 리뷰하는 중입니다..."):
+    with st.status("기획 초안을 구조화하고 리뷰를 준비하고 있습니다.", expanded=True) as status:
+        report_activity = _make_activity_reporter(status)
+        report_generation = _make_generation_reporter()
         try:
-            result = run_brief_review(raw_input)
+            result = run_brief_review(
+                raw_input,
+                progress_callback=report_activity,
+                output_callback=report_generation,
+            )
         except Exception as exc:
+            status.update(label="리뷰 실행 중 오류가 발생했습니다.", state="error")
             st.error(str(exc))
             return
+        status.update(label="리뷰 준비가 끝났습니다.", state="complete", expanded=True)
 
     st.session_state["source_text"] = result.raw_input
     st.session_state["review_result"] = result
@@ -228,16 +267,22 @@ def _render_result(result: ReviewResponse) -> None:
 
         chat_history = _get_conversation_messages()
         _append_clarifying_chat_message("user", prompt)
-        with st.spinner("보완 대화를 반영하는 중입니다..."):
+        with st.status("보완 대화를 반영하고 있습니다.", expanded=True) as status:
+            report_activity = _make_activity_reporter(status)
+            report_generation = _make_generation_reporter()
             try:
                 reply, refreshed = answer_clarifying_chat(
                     result=result,
                     user_message=prompt,
                     chat_history=chat_history,
+                    progress_callback=report_activity,
+                    output_callback=report_generation,
                 )
             except Exception as exc:
+                status.update(label="보완 대화 처리 중 오류가 발생했습니다.", state="error")
                 st.error(str(exc))
                 return
+            status.update(label="보완 대화 반영이 끝났습니다.", state="complete", expanded=True)
 
         _append_clarifying_chat_message("assistant", reply)
         if refreshed is not None:
@@ -274,16 +319,22 @@ def _render_result(result: ReviewResponse) -> None:
 
     chat_history = review_workspace_messages
     _append_review_chat_message("user", prompt)
-    with st.spinner("후속 메시지를 반영하는 중입니다..."):
+    with st.status("후속 메시지를 반영하고 있습니다.", expanded=True) as status:
+        report_activity = _make_activity_reporter(status)
+        report_generation = _make_generation_reporter()
         try:
             reply, refreshed = answer_review_chat(
                 result=result,
                 user_message=prompt,
                 chat_history=chat_history,
+                progress_callback=report_activity,
+                output_callback=report_generation,
             )
         except Exception as exc:
+            status.update(label="후속 메시지 처리 중 오류가 발생했습니다.", state="error")
             st.error(str(exc))
             return
+        status.update(label="후속 메시지 반영이 끝났습니다.", state="complete", expanded=True)
 
     _append_review_chat_message("assistant", reply)
     if refreshed is not None:

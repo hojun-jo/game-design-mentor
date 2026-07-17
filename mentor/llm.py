@@ -24,6 +24,7 @@ def get_extractor_llm():
     return init_chat_model(
         "openai:gpt-4o-mini",
         temperature=0,
+        streaming=True,
         api_key=_require_api_key(),
     ).with_structured_output(StructuredBrief)
 
@@ -33,6 +34,7 @@ def get_reviewer_base_llm():
     return init_chat_model(
         "openai:gpt-4o-mini",
         temperature=0.2,
+        streaming=True,
         api_key=_require_api_key(),
     )
 
