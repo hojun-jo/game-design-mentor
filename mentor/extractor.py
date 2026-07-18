@@ -34,6 +34,10 @@ Field rules:
 - mvp_goal: explicitly stated MVP validation goal, or ""
 - test_audience: explicitly stated playtest audience, or ""
 - constraints_note: explicitly stated budget, asset, or technical constraints, or ""
+- target_platforms: explicitly stated release platforms such as PC, mobile, web, or console, or []
+- visual_requirements: explicitly stated 2D/3D style, visual fidelity, rendering, or asset requirements, or ""
+- networking_scope: explicitly stated multiplayer, online, or network requirements, or ""
+- engine_experience: explicitly stated team experience with a game engine or programming stack, or ""
 - reference_titles: explicitly named comparable reference titles only, or []
 
 Extraction bans:
@@ -43,6 +47,7 @@ Extraction bans:
 - Do not infer reward_structure from common genre loops.
 - Do not infer mvp_goal from the concept or core loop.
 - Do not infer test_audience from target_player.
+- Do not infer platform, graphics requirements, networking, or engine experience from the genre or feature list.
 - Do not repair contradictions. Preserve only what is explicit and let validation ask follow-up questions.
 
 User draft:

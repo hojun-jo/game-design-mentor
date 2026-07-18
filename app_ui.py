@@ -184,6 +184,37 @@ def render_reviewed_mode(result: ReviewResponse) -> None:
     else:
         st.write("범위 축소 제안이 없습니다.")
 
+    st.subheader("게임 엔진 추천")
+    engine_recommendation = result.engine_recommendation
+    if engine_recommendation.status == "insufficient":
+        st.info("현재 기획 정보만으로는 책임 있게 엔진을 단정 추천하기 어렵습니다.")
+    elif engine_recommendation.status == "conditional":
+        st.info("아래 추천은 일부 기술 조건이 비어 있는 상태의 조건부 제안입니다.")
+
+    if engine_recommendation.primary:
+        primary = engine_recommendation.primary
+        st.markdown(f"**우선 후보: {primary.name} · 적합도 {primary.fit}**")
+        st.write(f"이유: {primary.reason}")
+        st.write(f"트레이드오프: {primary.tradeoff}")
+
+    if engine_recommendation.alternatives:
+        st.markdown("**대안**")
+        for option in engine_recommendation.alternatives:
+            st.markdown(f"**{option.name} · 적합도 {option.fit}**")
+            st.write(f"이유: {option.reason}")
+            st.write(f"트레이드오프: {option.tradeoff}")
+
+    render_rationale("판단 근거", engine_recommendation.rationale)
+    if engine_recommendation.assumptions:
+        st.markdown("**확인이 필요한 가정**")
+        for assumption in engine_recommendation.assumptions:
+            st.write(f"- {assumption}")
+    if engine_recommendation.follow_up_questions:
+        st.markdown("**추천 정확도를 높일 질문**")
+        for question in engine_recommendation.follow_up_questions:
+            st.write(f"- {question}")
+    st.caption("라이선스·가격·플랫폼 정책은 최종 선택 전 각 엔진의 공식 문서로 확인하세요.")
+
     st.subheader("플레이테스트 계획")
     st.write(f"가설: {result.playtest_plan.hypothesis}")
     render_rationale("근거", result.playtest_plan.rationale)
@@ -229,6 +260,19 @@ def render_review_sidebar_context(result: ReviewResponse) -> None:
                     st.markdown(f"**{index}. {direction.title}**")
                     if direction.tradeoff:
                         st.caption(direction.tradeoff)
+
+        recommendation = result.engine_recommendation
+        if recommendation.primary or recommendation.follow_up_questions:
+            with st.expander("게임 엔진 추천", expanded=False):
+                if recommendation.primary:
+                    st.markdown(
+                        f"**{recommendation.primary.name} · 적합도 {recommendation.primary.fit}**"
+                    )
+                    st.caption(recommendation.primary.reason)
+                elif recommendation.status == "insufficient":
+                    st.caption("추천에 필요한 기술 조건을 더 확인해야 합니다.")
+                for question in recommendation.follow_up_questions:
+                    st.write(f"- {question}")
 
         with st.expander("구조화 브리프", expanded=False):
             render_brief(result, show_heading=False)

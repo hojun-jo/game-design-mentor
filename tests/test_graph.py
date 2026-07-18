@@ -118,6 +118,7 @@ class GraphTest(unittest.TestCase):
             self.assertIn((source, "intent_alignment_review"), edges)
             self.assertIn((source, "core_loop_review"), edges)
             self.assertIn((source, "scope_playtest_review"), edges)
+            self.assertIn((source, "engine_recommendation_review"), edges)
 
     def test_review_graph_fans_in_before_direction_compare(self) -> None:
         edges = graph_edges()
@@ -125,6 +126,7 @@ class GraphTest(unittest.TestCase):
         self.assertIn(("intent_alignment_review", "merge_review_guidance"), edges)
         self.assertIn(("core_loop_review", "merge_review_guidance"), edges)
         self.assertIn(("scope_playtest_review", "merge_review_guidance"), edges)
+        self.assertIn(("engine_recommendation_review", "merge_review_guidance"), edges)
         self.assertIn(("merge_review_guidance", "direction_compare"), edges)
         self.assertNotIn(("intent_alignment_review", "core_loop_review"), edges)
         self.assertNotIn(("core_loop_review", "scope_playtest_review"), edges)

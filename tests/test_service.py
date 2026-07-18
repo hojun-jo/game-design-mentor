@@ -50,6 +50,7 @@ class ServiceTest(unittest.TestCase):
             )
 
         self.assertEqual(result.mode, "reviewed")
+        self.assertEqual(result.engine_recommendation.status, "insufficient")
         self.assertIn(
             "기획 초안에서 구조화된 브리프를 추출하고 있습니다.",
             progress_messages,
@@ -122,6 +123,27 @@ class ServiceTest(unittest.TestCase):
         self.assertIsNone(refreshed)
         classify_follow_up.assert_not_called()
 
+    def test_engine_brief_update_bypasses_guards_and_refreshes_review(self) -> None:
+        review = run_brief_review_without_graph()
+        update = "스팀 게임 출시 예정. 2d or 2.5d or 3d top view"
+
+        with (
+            patch("mentor.service.classify_follow_up_domain") as classify_domain,
+            patch("mentor.service.classify_review_follow_up") as classify_follow_up,
+            patch("mentor.service.run_brief_review", return_value=review) as refresh,
+        ):
+            reply, refreshed = answer_review_chat(
+                result=review,
+                user_message=update,
+                chat_history=[],
+            )
+
+        self.assertIn("기술 조건을 반영", reply)
+        self.assertIs(refreshed, review)
+        classify_domain.assert_not_called()
+        classify_follow_up.assert_not_called()
+        self.assertIn(update, refresh.call_args.args[0])
+
     def test_answer_clarifying_chat_rejects_out_of_scope_follow_up(self) -> None:
         review = run_brief_review_without_graph()
 
@@ -169,6 +191,33 @@ class ServiceTest(unittest.TestCase):
             result.final_summary,
             "게임 기획과 관련된 내용만 리뷰할 수 있습니다.",
         )
+
+    def test_run_brief_review_maps_engine_recommendation(self) -> None:
+        class FakeGraph:
+            def invoke(self, state):
+                return {
+                    **state,
+                    "mode": "reviewed",
+                    "engine_recommendation": {
+                        "status": "conditional",
+                        "primary": {
+                            "name": "Godot",
+                            "fit": "높음",
+                            "reason": "2D 프로토타입 범위와 맞습니다.",
+                            "tradeoff": "출시 플랫폼 조건을 더 확인해야 합니다.",
+                        },
+                        "rationale": ["목표 플랫폼은 PC로 명시됐습니다."],
+                        "assumptions": ["온라인 기능은 MVP에 포함되지 않는다고 가정했습니다."],
+                    },
+                }
+
+        with patch("mentor.service.get_review_graph", return_value=FakeGraph()):
+            result = run_brief_review(
+                "PC용 2D 퍼즐 게임입니다. 플레이어에게 성취감을 주며, 퍼즐을 풀고 별을 모아 다음 스테이지를 엽니다."
+            )
+
+        self.assertEqual(result.engine_recommendation.status, "conditional")
+        self.assertEqual(result.engine_recommendation.primary.name, "Godot")
 
 
 def run_brief_review_without_graph():

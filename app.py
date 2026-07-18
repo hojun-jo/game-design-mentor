@@ -402,7 +402,7 @@ def _render_result(result: ReviewResponse) -> None:
         messages=review_workspace_messages,
         form_key="review_chat_form",
         input_label="질문 또는 정정",
-        placeholder="예: 의도는 전투가 아니라 탐험 긴장감이야 / 왜 범위를 줄이라고 했어?",
+        placeholder="예: PC 스팀 출시, 탑뷰 2D·2.5D·3D를 검토 중이야 / 왜 범위를 줄이라고 했어?",
     )
 
     with st.expander("리뷰 리포트", expanded=not _get_review_chat_messages()):

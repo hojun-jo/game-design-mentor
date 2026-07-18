@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from mentor.models import ClarifyingQuestion
+from mentor.models import ClarifyingQuestion, EngineOption, EngineRecommendation
 from mentor.reviewer import (
     merge_review_guidance,
     normalize_directions,
+    normalize_engine_recommendation,
     normalize_mentor_principles,
     normalize_mentor_questions,
     normalize_playtest_questions,
@@ -16,6 +17,47 @@ from mentor.reviewer import (
 class ReviewerNormalizationTest(unittest.TestCase):
     def test_normalize_directions_supplies_two_fallbacks(self) -> None:
         self.assertEqual(len(normalize_directions([])), 2)
+
+    def test_normalize_engine_recommendation_keeps_primary_and_unique_alternatives(
+        self,
+    ) -> None:
+        recommendation = normalize_engine_recommendation(
+            EngineRecommendation(
+                status="conditional",
+                primary=EngineOption(
+                    name=" Godot ",
+                    fit="높음",
+                    reason=" 2D 프로토타입에 집중할 수 있습니다. ",
+                    tradeoff=" 콘솔 출시 조건은 별도 확인이 필요합니다. ",
+                ),
+                alternatives=[
+                    EngineOption(
+                        name="Godot",
+                        fit="높음",
+                        reason="중복 후보입니다.",
+                        tradeoff="중복입니다.",
+                    ),
+                    EngineOption(
+                        name="Unity",
+                        fit="중간",
+                        reason="팀 경험을 활용할 수 있습니다.",
+                        tradeoff="기술 범위를 더 관리해야 합니다.",
+                    ),
+                ],
+                rationale=["명시된 2D 요구를 반영했습니다."],
+            )
+        )
+
+        self.assertEqual(recommendation.primary.name, "Godot")
+        self.assertEqual([option.name for option in recommendation.alternatives], ["Unity"])
+        self.assertEqual(recommendation.status, "conditional")
+
+    def test_insufficient_engine_recommendation_supplies_follow_up_questions(self) -> None:
+        recommendation = normalize_engine_recommendation(EngineRecommendation())
+
+        self.assertEqual(recommendation.status, "insufficient")
+        self.assertIsNone(recommendation.primary)
+        self.assertGreaterEqual(len(recommendation.follow_up_questions), 1)
 
     def test_normalize_playtest_questions_supplies_minimum_questions(self) -> None:
         questions = normalize_playtest_questions(

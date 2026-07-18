@@ -11,6 +11,9 @@ from .models import (
     CoreLoopReviewPayload,
     DirectionComparePayload,
     DirectionOption,
+    EngineOption,
+    EngineRecommendation,
+    EngineRecommendationPayload,
     IntentReviewPayload,
     LearningSummaryPayload,
     MentorState,
@@ -62,6 +65,62 @@ def normalize_directions(
         normalized.append(fallbacks[len(normalized)])
 
     return normalized[:2]
+
+
+def normalize_engine_recommendation(
+    recommendation: EngineRecommendation | dict | None,
+) -> EngineRecommendation:
+    if isinstance(recommendation, dict):
+        recommendation = EngineRecommendation.model_validate(recommendation)
+    if recommendation is None:
+        recommendation = EngineRecommendation()
+
+    def normalize_option(option: EngineOption | dict | None) -> EngineOption | None:
+        if isinstance(option, dict):
+            option = EngineOption.model_validate(option)
+        if option is None:
+            return None
+        name = clean_text(option.name)
+        reason = clean_text(option.reason)
+        tradeoff = clean_text(option.tradeoff)
+        if not name or not reason or not tradeoff:
+            return None
+        return EngineOption(
+            name=name,
+            fit=option.fit,
+            reason=reason,
+            tradeoff=tradeoff,
+        )
+
+    primary = normalize_option(recommendation.primary)
+    alternatives: list[EngineOption] = []
+    for option in recommendation.alternatives:
+        normalized = normalize_option(option)
+        if normalized is None:
+            continue
+        if primary is not None and normalized.name == primary.name:
+            continue
+        if any(existing.name == normalized.name for existing in alternatives):
+            continue
+        alternatives.append(normalized)
+        if len(alternatives) == 2:
+            break
+
+    status = recommendation.status if primary is not None else "insufficient"
+    questions = normalize_string_list(recommendation.follow_up_questions)[:3]
+    if status == "insufficient" and not questions:
+        questions = [
+            "우선 출시할 플랫폼(PC, 모바일, 웹, 콘솔)은 무엇인가요?",
+            "2D/3D 표현 수준과 온라인 멀티플레이 필요 여부는 어떻게 되나요?",
+        ]
+    return EngineRecommendation(
+        status=status,
+        primary=primary,
+        alternatives=alternatives,
+        rationale=normalize_string_list(recommendation.rationale)[:3],
+        assumptions=normalize_string_list(recommendation.assumptions)[:3],
+        follow_up_questions=questions,
+    )
 
 
 def normalize_playtest_questions(
@@ -347,6 +406,46 @@ Structured brief:
     }
 
 
+def generate_engine_recommendation_review(state: MentorState) -> dict:
+    prompt = f"""
+You are a practical game technology advisor for beginner indie developers.
+Write the recommendation in Korean and keep it concise.
+
+Recommend a game engine only from explicitly stated project facts. The recommendation is
+an aid for a prototype decision, not a permanent technical guarantee.
+
+Rules:
+- Compare a primary engine with at most 2 alternatives. Candidates may include Unity,
+  Unreal Engine, Godot, or another clearly justified engine.
+- Use platform, visual requirements, networking scope, team engine experience, MVP scope,
+  development window, and constraints as evidence when they are present.
+- Do not infer missing technical requirements from the genre.
+- Never state current licensing, pricing, platform support, or policy terms as fact.
+  Put any uncertainty in `assumptions` and ask the user to confirm official terms before
+  committing to an engine.
+- Set status="recommended" only when platform and at least two other engine-relevant facts
+  are explicit. Set status="conditional" when a likely option exists but important facts are
+  missing. Set status="insufficient" when no responsible primary recommendation is possible.
+- For status="insufficient", set primary to null and return 1-3 concrete follow_up_questions.
+- Every engine option requires a name, fit (높음/중간/낮음), one-sentence reason, and
+  one-sentence tradeoff.
+- rationale must contain 2-3 bullets tied to explicit brief fields or missing fields.
+- assumptions must list only facts that need confirmation; do not disguise assumptions as facts.
+
+Structured brief:
+{serialize_brief_for_prompt(state)}
+""".strip()
+
+    recommendation = _invoke_structured_reviewer(
+        EngineRecommendationPayload,
+        prompt,
+        "게임 엔진 추천 생성 중",
+    )
+    return {
+        "engine_recommendation": normalize_engine_recommendation(recommendation),
+    }
+
+
 def generate_direction_compare(state: MentorState) -> dict:
     prompt = f"""
 You are a rigorous but practical game design mentor for beginner indie developers.
@@ -583,6 +682,9 @@ def normalize_review_payload(state: MentorState) -> dict:
         ),
         "scope_recommendations": normalize_string_list(
             state.get("scope_recommendations", [])
+        ),
+        "engine_recommendation": normalize_engine_recommendation(
+            state.get("engine_recommendation")
         ),
         "playtest_hypothesis": clean_text(state.get("playtest_hypothesis", "")),
         "playtest_questions": normalize_playtest_questions(

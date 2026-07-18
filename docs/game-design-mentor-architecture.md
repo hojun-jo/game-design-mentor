@@ -17,6 +17,7 @@
 - 질문은 누락 정보 수집뿐 아니라 사용자가 게임 기획 판단 기준을 배우는 장치로 설계한다.
 - 모든 진단은 최소 하나의 판단 기준 또는 설계 원칙과 연결한다.
 - 모든 리뷰 섹션은 UI에서 `근거`를 bullet 목록으로 보여줄 수 있도록 rationale 배열 필드를 가진다.
+- 게임 엔진 추천은 별도 결과 계약으로 관리하며, 입력이 부족할 때는 리포트 전체를 막지 않고 조건부 추천 또는 보류와 추가 질문을 보여 준다.
 - 필수값이 부족하면 리뷰를 멈추고 질문 단계로 돌아간다.
 - 최종 출력 구조는 항상 고정한다.
 - MVP에서는 계정, DB, 장기 저장, 비동기 큐를 넣지 않는다.
@@ -128,6 +129,7 @@ User
   - Intent Alignment Review
   - Core Loop and Differentiation Review
   - MVP Scope and Playtest Plan Review
+  - Engine Recommendation Review
   - Direction Compare
   - Build Learning Summary
   - Final Render Mapping
@@ -209,6 +211,10 @@ MVP에서는 API 서버를 별도 프로세스로 쪼개지 않는다. 필요해
   "mvp_goal": "",
   "test_audience": "",
   "constraints_note": "",
+  "target_platforms": [],
+  "visual_requirements": "",
+  "networking_scope": "",
+  "engine_experience": "",
   "reference_titles": [],
   "missing_fields": [],
   "soft_missing_fields": [],
@@ -226,6 +232,7 @@ MVP에서는 API 서버를 별도 프로세스로 쪼개지 않는다. 필요해
   "playtest_hypothesis": "",
   "direction_options": [],
   "scope_recommendations": [],
+  "engine_recommendation": {},
   "playtest_questions": [],
   "reflection_summary": "",
   "next_self_check_question": "",

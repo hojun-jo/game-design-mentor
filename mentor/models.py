@@ -24,6 +24,10 @@ class MentorState(MessagesState, total=False):
     mvp_goal: str
     test_audience: str
     constraints_note: str
+    target_platforms: list[str]
+    visual_requirements: str
+    networking_scope: str
+    engine_experience: str
     reference_titles: list[str]
     reference_contexts: list["ReferenceGameContext"]
     reference_citations: list["ReferenceCitation"]
@@ -49,6 +53,7 @@ class MentorState(MessagesState, total=False):
     scope_rationale: list[str]
     playtest_rationale: list[str]
     playtest_hypothesis: str
+    engine_recommendation: "EngineRecommendation"
     direction_options: list["DirectionOption"]
     scope_recommendations: list[str]
     playtest_questions: list[str]
@@ -70,6 +75,10 @@ class StructuredBrief(BaseModel):
     mvp_goal: str = Field(default="")
     test_audience: str = Field(default="")
     constraints_note: str = Field(default="")
+    target_platforms: list[str] = Field(default_factory=list)
+    visual_requirements: str = Field(default="")
+    networking_scope: str = Field(default="")
+    engine_experience: str = Field(default="")
     reference_titles: list[str] = Field(default_factory=list)
 
 
@@ -100,6 +109,22 @@ class DirectionOption(BaseModel):
     title: str = Field(default="")
     reason: str = Field(default="")
     tradeoff: str = Field(default="")
+
+
+class EngineOption(BaseModel):
+    name: str = Field(default="")
+    fit: Literal["높음", "중간", "낮음"] = "중간"
+    reason: str = Field(default="")
+    tradeoff: str = Field(default="")
+
+
+class EngineRecommendation(BaseModel):
+    status: Literal["recommended", "conditional", "insufficient"] = "insufficient"
+    primary: EngineOption | None = None
+    alternatives: list[EngineOption] = Field(default_factory=list)
+    rationale: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    follow_up_questions: list[str] = Field(default_factory=list)
 
 
 class ReferenceGameContext(BaseModel):
@@ -188,6 +213,10 @@ class ScopePlaytestPayload(BaseModel):
     playtest_questions: list[str] = Field(default_factory=list)
 
 
+class EngineRecommendationPayload(EngineRecommendation):
+    pass
+
+
 class DirectionComparePayload(BaseModel):
     direction_options: list[DirectionOption] = Field(default_factory=list)
     final_summary: str = Field(default="")
@@ -238,6 +267,9 @@ class ReviewResponse(BaseModel):
     diagnosis: DiagnosisResult = Field(default_factory=DiagnosisResult)
     directions: list[DirectionOption] = Field(default_factory=list)
     scope: ScopeResult = Field(default_factory=ScopeResult)
+    engine_recommendation: EngineRecommendation = Field(
+        default_factory=EngineRecommendation
+    )
     playtest_plan: PlaytestPlan = Field(default_factory=PlaytestPlan)
     learning: LearningResult = Field(default_factory=LearningResult)
     final_summary: str = Field(default="")

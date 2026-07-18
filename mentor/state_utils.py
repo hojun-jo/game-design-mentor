@@ -79,6 +79,10 @@ def normalize_brief(brief: StructuredBrief) -> StructuredBrief:
         mvp_goal=clean_text(brief.mvp_goal),
         test_audience=clean_text(brief.test_audience),
         constraints_note=clean_text(brief.constraints_note),
+        target_platforms=normalize_string_list(brief.target_platforms),
+        visual_requirements=clean_text(brief.visual_requirements),
+        networking_scope=clean_text(brief.networking_scope),
+        engine_experience=clean_text(brief.engine_experience),
         reference_titles=normalize_string_list(brief.reference_titles),
     )
 
@@ -97,6 +101,10 @@ def brief_from_state(state: MentorState) -> StructuredBrief:
         mvp_goal=state.get("mvp_goal", ""),
         test_audience=state.get("test_audience", ""),
         constraints_note=state.get("constraints_note", ""),
+        target_platforms=state.get("target_platforms", []),
+        visual_requirements=state.get("visual_requirements", ""),
+        networking_scope=state.get("networking_scope", ""),
+        engine_experience=state.get("engine_experience", ""),
         reference_titles=state.get("reference_titles", []),
     )
 

@@ -7,6 +7,65 @@ from .llm_stream import get_stream_config, report_structured_output
 from .models import ChatMessage, DomainClassificationPayload, StructuredBrief
 from .validation import is_game_design_related
 
+
+ENGINE_PLATFORM_SIGNALS = (
+    "steam",
+    "스팀",
+    "pc",
+    "mobile",
+    "모바일",
+    "ios",
+    "android",
+    "web",
+    "console",
+    "콘솔",
+)
+ENGINE_VISUAL_SIGNALS = (
+    "2d",
+    "2.5d",
+    "3d",
+    "top view",
+    "top-view",
+    "탑뷰",
+    "isometric",
+    "아이소메트릭",
+)
+ENGINE_NETWORK_SIGNALS = (
+    "multiplayer",
+    "멀티플레이",
+    "온라인",
+    "network",
+    "네트워크",
+)
+ENGINE_UPDATE_SIGNALS = (
+    "출시",
+    "예정",
+    "목표",
+    "검토",
+    "후보",
+    "지원",
+    "요구",
+    "사용",
+    "경험",
+)
+
+
+def is_engine_brief_update(user_message: str) -> bool:
+    """Recognize terse technical constraints added to an active game review."""
+    text = " ".join(user_message.casefold().split())
+    has_engine_constraint = any(
+        signal in text
+        for signal in (
+            *ENGINE_PLATFORM_SIGNALS,
+            *ENGINE_VISUAL_SIGNALS,
+            *ENGINE_NETWORK_SIGNALS,
+        )
+    )
+    if not has_engine_constraint:
+        return False
+
+    return any(signal in text for signal in ENGINE_UPDATE_SIGNALS) or "?" not in text
+
 DOMAIN_REJECTION_MESSAGE = (
     "게임 기획과 관련된 내용만 리뷰할 수 있습니다. 게임 콘셉트, 플레이어, 코어 루프, "
     "보상 구조, MVP 목표 중 하나 이상을 포함해 주세요."

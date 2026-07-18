@@ -4,15 +4,21 @@ from collections.abc import Callable
 
 from langchain_core.messages import HumanMessage
 
-from .domain_classifier import DOMAIN_REJECTION_MESSAGE, classify_follow_up_domain
+from .domain_classifier import (
+    DOMAIN_REJECTION_MESSAGE,
+    classify_follow_up_domain,
+    is_engine_brief_update,
+)
 from .graph import get_review_graph
 from .llm_stream import LLMOutputCallback, llm_output_context
 from .models import (
     ChatMessage,
     DiagnosisResult,
+    EngineRecommendation,
     LearningResult,
     MentorState,
     PlaytestPlan,
+    ReviewChatPayload,
     ReviewResponse,
     ScopeResult,
 )
@@ -38,7 +44,8 @@ GRAPH_PROGRESS_MESSAGES: dict[str, str] = {
     "intent_alignment_review": "플레이어 의도와 감정 목표의 정렬을 진단했습니다.",
     "core_loop_review": "코어 루프와 반복 동기의 연결을 진단했습니다.",
     "scope_playtest_review": "MVP 범위와 플레이테스트 가설을 점검했습니다.",
-    "merge_review_guidance": "세 가지 진단에서 나온 판단 기준을 정리했습니다.",
+    "engine_recommendation_review": "프로젝트 조건에 맞는 게임 엔진 후보를 비교했습니다.",
+    "merge_review_guidance": "리뷰 진단과 엔진 추천의 판단 기준을 정리했습니다.",
     "direction_compare": "선택 가능한 해석 방향 2개를 비교했습니다.",
     "build_learning_summary": "다음 기획에도 쓸 수 있는 학습 요약을 작성했습니다.",
     "build_review_response": "리뷰 리포트로 표시할 응답을 정리했습니다.",
@@ -55,6 +62,7 @@ GRAPH_NEXT_PROGRESS_MESSAGES: dict[str, str] = {
     "intent_alignment_review": "다른 진단 결과를 기다리며 리뷰 기준을 모으고 있습니다.",
     "core_loop_review": "다른 진단 결과를 기다리며 리뷰 기준을 모으고 있습니다.",
     "scope_playtest_review": "다른 진단 결과를 기다리며 리뷰 기준을 모으고 있습니다.",
+    "engine_recommendation_review": "다른 진단 결과를 기다리며 리뷰 기준을 모으고 있습니다.",
     "merge_review_guidance": "서로 다른 선택 방향과 트레이드오프를 비교하고 있습니다.",
     "direction_compare": "리뷰 내용을 학습 요약으로 압축하고 있습니다.",
     "build_learning_summary": "화면에 표시할 리뷰 응답을 정리하고 있습니다.",
@@ -73,6 +81,7 @@ def _review_context_for_chat(result: ReviewResponse) -> dict:
         "diagnosis": result.diagnosis.model_dump(),
         "directions": [direction.model_dump() for direction in result.directions],
         "scope": result.scope.model_dump(),
+        "engine_recommendation": result.engine_recommendation.model_dump(),
         "playtest_plan": result.playtest_plan.model_dump(),
         "learning": result.learning.model_dump(),
         "mentor_questions": [question.model_dump() for question in result.questions],
@@ -133,6 +142,7 @@ def _build_response(state: MentorState) -> ReviewResponse:
             "mentor_principles": [],
             "mentor_questions": [],
             "scope_recommendations": [],
+            "engine_recommendation": EngineRecommendation(),
             "playtest_hypothesis": "",
             "playtest_questions": [],
             "direction_options": [],
@@ -162,6 +172,7 @@ def _build_response(state: MentorState) -> ReviewResponse:
             rationale=normalized_review["scope_rationale"],
             recommendations=normalized_review["scope_recommendations"],
         ),
+        engine_recommendation=normalized_review["engine_recommendation"],
         playtest_plan=PlaytestPlan(
             hypothesis=normalized_review["playtest_hypothesis"],
             rationale=normalized_review["playtest_rationale"],
@@ -249,22 +260,24 @@ def answer_clarifying_chat(
     if not message:
         raise ValueError("보완 질문에 대한 답변이나 질문을 입력해 주세요.")
 
-    _report_progress(
-        progress_callback,
-        "보완 메시지가 게임 기획 대화 범위 안인지 확인하고 있습니다.",
-    )
-    with llm_output_context(output_callback):
-        domain_classification = classify_follow_up_domain(
-            user_message=message,
-            interaction_context=_clarifying_context_for_domain(result),
-            chat_history=chat_history,
-        )
-    if not _domain_allows_follow_up(domain_classification):
+    engine_brief_update = is_engine_brief_update(message)
+    if not engine_brief_update:
         _report_progress(
             progress_callback,
-            "게임 기획과 관련 없는 보완 메시지로 분류해 응답을 중단했습니다.",
+            "보완 메시지가 게임 기획 대화 범위 안인지 확인하고 있습니다.",
         )
-        return DOMAIN_REJECTION_MESSAGE, None
+        with llm_output_context(output_callback):
+            domain_classification = classify_follow_up_domain(
+                user_message=message,
+                interaction_context=_clarifying_context_for_domain(result),
+                chat_history=chat_history,
+            )
+        if not _domain_allows_follow_up(domain_classification):
+            _report_progress(
+                progress_callback,
+                "게임 기획과 관련 없는 보완 메시지로 분류해 응답을 중단했습니다.",
+            )
+            return DOMAIN_REJECTION_MESSAGE, None
 
     _report_progress(
         progress_callback,
@@ -304,33 +317,42 @@ def answer_review_chat(
     if not message:
         raise ValueError("후속 질문이나 정정 내용을 입력해 주세요.")
 
-    _report_progress(
-        progress_callback,
-        "후속 메시지가 게임 기획 대화 범위 안인지 확인하고 있습니다.",
-    )
-    with llm_output_context(output_callback):
-        domain_classification = classify_follow_up_domain(
-            user_message=message,
-            interaction_context=_review_context_for_chat(result),
-            chat_history=chat_history,
-        )
-    if not _domain_allows_follow_up(domain_classification):
+    engine_brief_update = is_engine_brief_update(message)
+    if not engine_brief_update:
         _report_progress(
             progress_callback,
-            "게임 기획과 관련 없는 후속 메시지로 분류해 응답을 중단했습니다.",
+            "후속 메시지가 게임 기획 대화 범위 안인지 확인하고 있습니다.",
         )
-        return DOMAIN_REJECTION_MESSAGE, None
+        with llm_output_context(output_callback):
+            domain_classification = classify_follow_up_domain(
+                user_message=message,
+                interaction_context=_review_context_for_chat(result),
+                chat_history=chat_history,
+            )
+        if not _domain_allows_follow_up(domain_classification):
+            _report_progress(
+                progress_callback,
+                "게임 기획과 관련 없는 후속 메시지로 분류해 응답을 중단했습니다.",
+            )
+            return DOMAIN_REJECTION_MESSAGE, None
 
-    _report_progress(
-        progress_callback,
-        "후속 메시지가 질문인지, 리뷰를 갱신해야 하는 정정인지 분류하고 있습니다.",
-    )
-    with llm_output_context(output_callback):
-        payload = classify_review_follow_up(
-            review_context=_review_context_for_chat(result),
-            chat_history=chat_history,
-            user_message=message,
+    if engine_brief_update:
+        payload = ReviewChatPayload(
+            action="revise",
+            reply="기술 조건을 반영해 엔진 추천과 리뷰를 다시 갱신하겠습니다.",
+            revision_note=message,
         )
+    else:
+        _report_progress(
+            progress_callback,
+            "후속 메시지가 질문인지, 리뷰를 갱신해야 하는 정정인지 분류하고 있습니다.",
+        )
+        with llm_output_context(output_callback):
+            payload = classify_review_follow_up(
+                review_context=_review_context_for_chat(result),
+                chat_history=chat_history,
+                user_message=message,
+            )
     if payload.action == "answer":
         _report_progress(progress_callback, "현재 리뷰 컨텍스트를 바탕으로 답변을 작성했습니다.")
         return payload.reply, None

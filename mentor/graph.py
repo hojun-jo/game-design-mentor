@@ -15,6 +15,7 @@ from .reviewer import (
     build_learning_summary,
     generate_core_loop_review,
     generate_direction_compare,
+    generate_engine_recommendation_review,
     generate_intent_alignment_review,
     generate_scope_playtest_review,
     merge_review_guidance,
@@ -116,6 +117,9 @@ def get_review_graph():
     graph_builder.add_node("intent_alignment_review", generate_intent_alignment_review)
     graph_builder.add_node("core_loop_review", generate_core_loop_review)
     graph_builder.add_node("scope_playtest_review", generate_scope_playtest_review)
+    graph_builder.add_node(
+        "engine_recommendation_review", generate_engine_recommendation_review
+    )
     graph_builder.add_node("merge_review_guidance", merge_review_guidance)
     graph_builder.add_node("direction_compare", generate_direction_compare)
     graph_builder.add_node("build_learning_summary", build_learning_summary)
@@ -147,12 +151,19 @@ def get_review_graph():
     graph_builder.add_edge("merge_reference_lookup_results", "intent_alignment_review")
     graph_builder.add_edge("merge_reference_lookup_results", "core_loop_review")
     graph_builder.add_edge("merge_reference_lookup_results", "scope_playtest_review")
+    graph_builder.add_edge(
+        "merge_reference_lookup_results", "engine_recommendation_review"
+    )
     graph_builder.add_edge("mark_reference_lookup_skipped", "intent_alignment_review")
     graph_builder.add_edge("mark_reference_lookup_skipped", "core_loop_review")
     graph_builder.add_edge("mark_reference_lookup_skipped", "scope_playtest_review")
+    graph_builder.add_edge(
+        "mark_reference_lookup_skipped", "engine_recommendation_review"
+    )
     graph_builder.add_edge("intent_alignment_review", "merge_review_guidance")
     graph_builder.add_edge("core_loop_review", "merge_review_guidance")
     graph_builder.add_edge("scope_playtest_review", "merge_review_guidance")
+    graph_builder.add_edge("engine_recommendation_review", "merge_review_guidance")
     graph_builder.add_edge("merge_review_guidance", "direction_compare")
     graph_builder.add_edge("direction_compare", "build_learning_summary")
     graph_builder.add_edge("build_learning_summary", "build_review_response")
