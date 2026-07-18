@@ -315,7 +315,7 @@ def _render_intake() -> None:
         _start_review_from_input(raw_input)
         return
 
-    prompt = render_chat_workspace(
+    prompt, intake_activity_slot = render_chat_workspace(
         title=None,
         caption=None,
         messages=_get_conversation_messages(),
@@ -334,7 +334,8 @@ def _render_intake() -> None:
         return
 
     _append_intake_chat_message("user", prompt)
-    _start_review_from_input(prompt)
+    with intake_activity_slot.container():
+        _start_review_from_input(prompt)
 
 
 def _render_result(result: ReviewResponse) -> None:
@@ -349,7 +350,7 @@ def _render_result(result: ReviewResponse) -> None:
         _ensure_clarifying_chat_started(result)
         render_clarifying_sidebar_context(result)
         render_clarifying_mode(result)
-        prompt = render_chat_workspace(
+        prompt, clarifying_activity_slot = render_chat_workspace(
             title=None,
             caption=None,
             messages=_get_conversation_messages(),
@@ -362,18 +363,19 @@ def _render_result(result: ReviewResponse) -> None:
 
         chat_history = _get_conversation_messages()
         _append_clarifying_chat_message("user", prompt)
-        clarifying_response = _run_streamed_operation(
-            start_label="보완 대화를 반영하고 있습니다.",
-            complete_label="보완 대화 반영이 끝났습니다.",
-            error_label="보완 대화 처리 중 오류가 발생했습니다.",
-            operation=lambda report_activity, report_generation: answer_clarifying_chat(
-                result=result,
-                user_message=prompt,
-                chat_history=chat_history,
-                progress_callback=report_activity,
-                output_callback=report_generation,
-            ),
-        )
+        with clarifying_activity_slot.container():
+            clarifying_response = _run_streamed_operation(
+                start_label="보완 대화를 반영하고 있습니다.",
+                complete_label="보완 대화 반영이 끝났습니다.",
+                error_label="보완 대화 처리 중 오류가 발생했습니다.",
+                operation=lambda report_activity, report_generation: answer_clarifying_chat(
+                    result=result,
+                    user_message=prompt,
+                    chat_history=chat_history,
+                    progress_callback=report_activity,
+                    output_callback=report_generation,
+                ),
+            )
         if clarifying_response is None:
             return
         reply, refreshed = clarifying_response
@@ -396,7 +398,7 @@ def _render_result(result: ReviewResponse) -> None:
     _ensure_review_chat_started(result)
     render_review_sidebar_context(result)
     review_workspace_messages = _get_review_workspace_messages()
-    prompt = render_chat_workspace(
+    prompt, review_activity_slot = render_chat_workspace(
         title=None,
         caption=None,
         messages=review_workspace_messages,
@@ -413,18 +415,19 @@ def _render_result(result: ReviewResponse) -> None:
 
     chat_history = review_workspace_messages
     _append_review_chat_message("user", prompt)
-    review_response = _run_streamed_operation(
-        start_label="후속 메시지를 반영하고 있습니다.",
-        complete_label="후속 메시지 반영이 끝났습니다.",
-        error_label="후속 메시지 처리 중 오류가 발생했습니다.",
-        operation=lambda report_activity, report_generation: answer_review_chat(
-            result=result,
-            user_message=prompt,
-            chat_history=chat_history,
-            progress_callback=report_activity,
-            output_callback=report_generation,
-        ),
-    )
+    with review_activity_slot.container():
+        review_response = _run_streamed_operation(
+            start_label="후속 메시지를 반영하고 있습니다.",
+            complete_label="후속 메시지 반영이 끝났습니다.",
+            error_label="후속 메시지 처리 중 오류가 발생했습니다.",
+            operation=lambda report_activity, report_generation: answer_review_chat(
+                result=result,
+                user_message=prompt,
+                chat_history=chat_history,
+                progress_callback=report_activity,
+                output_callback=report_generation,
+            ),
+        )
     if review_response is None:
         return
     reply, refreshed = review_response

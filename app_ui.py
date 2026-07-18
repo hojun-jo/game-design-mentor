@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import streamlit as st
 
 from mentor.models import ChatMessage, ReviewResponse
@@ -76,7 +78,7 @@ def render_chat_workspace(
     form_key: str,
     input_label: str,
     placeholder: str,
-) -> str | None:
+) -> tuple[str | None, Any]:
     if title:
         st.subheader(title)
     if caption:
@@ -86,6 +88,7 @@ def render_chat_workspace(
         with st.chat_message(message.role):
             st.write(message.content)
 
+    activity_slot = st.empty()
     with st.form(form_key, clear_on_submit=True):
         draft = st.text_area(
             input_label,
@@ -95,8 +98,8 @@ def render_chat_workspace(
         submitted = st.form_submit_button("보내기", type="primary")
 
     if not submitted or not draft.strip():
-        return None
-    return draft.strip()
+        return None, activity_slot
+    return draft.strip(), activity_slot
 
 
 def render_clarifying_sidebar_context(result: ReviewResponse) -> None:
