@@ -10,7 +10,11 @@ from langgraph.prebuilt import ToolNode
 from .domain_classifier import DOMAIN_REJECTION_MESSAGE, classify_game_design_domain
 from .extractor import extract_brief
 from .models import MentorState
-from .reference_tools import lookup_reference_game, merge_reference_lookup_results
+from .reference_tools import (
+    discover_reference_games,
+    lookup_reference_game,
+    merge_reference_lookup_results,
+)
 from .reviewer import (
     build_learning_summary,
     generate_core_loop_review,
@@ -21,6 +25,7 @@ from .reviewer import (
     merge_review_guidance,
 )
 from .state_utils import brief_from_state
+from .state_utils import normalize_string_list
 from .validation import validate_required_fields_patch
 
 
@@ -68,22 +73,44 @@ def build_review_response(_: MentorState) -> dict:
 
 def route_after_validation(state: MentorState) -> Literal[
     "build_clarifying_response",
-    "reference_lookup_tool_node",
-    "mark_reference_lookup_skipped",
+    "discover_reference_games",
 ]:
     if not state.get("review_ready", False):
         return "build_clarifying_response"
-    if state.get("reference_titles", []):
-        return "reference_lookup_tool_node"
+    return "discover_reference_games"
+
+
+def route_after_reference_discovery(state: MentorState) -> Literal[
+    "prepare_reference_lookup",
+    "mark_reference_lookup_skipped",
+]:
+    if state.get("reference_titles", []) or state.get("recommended_reference_titles", []):
+        return "prepare_reference_lookup"
     return "mark_reference_lookup_skipped"
 
 
 def prepare_reference_lookup(state: MentorState) -> dict:
     tool_calls = []
-    for index, title in enumerate(state.get("reference_titles", [])[:3]):
+    user_titles = normalize_string_list(state.get("reference_titles", []))[:3]
+    user_title_keys = {title.casefold() for title in user_titles}
+    recommended_titles = [
+        title
+        for title in normalize_string_list(state.get("recommended_reference_titles", []))
+        if title.casefold() not in user_title_keys
+    ][:3]
+    for index, title in enumerate(user_titles):
         tool_calls.append(
             {
-                "id": f"reference-lookup-{index}",
+                "id": f"user-reference-{index}",
+                "name": "lookup_reference_game",
+                "args": {"title": title},
+                "type": "tool_call",
+            }
+        )
+    for index, title in enumerate(recommended_titles):
+        tool_calls.append(
+            {
+                "id": f"recommended-reference-{index}",
                 "name": "lookup_reference_game",
                 "args": {"title": title},
                 "type": "tool_call",
@@ -110,6 +137,7 @@ def get_review_graph():
     graph_builder.add_node("reject_out_of_scope", reject_out_of_scope)
     graph_builder.add_node("validate_required_fields", validate_required_fields_patch)
     graph_builder.add_node("build_clarifying_response", build_clarifying_response)
+    graph_builder.add_node("discover_reference_games", discover_reference_games)
     graph_builder.add_node("prepare_reference_lookup", prepare_reference_lookup)
     graph_builder.add_node("reference_lookup_tool_node", reference_lookup_tool_node)
     graph_builder.add_node("merge_reference_lookup_results", merge_reference_lookup_results)
@@ -140,7 +168,14 @@ def get_review_graph():
         route_after_validation,
         {
             "build_clarifying_response": "build_clarifying_response",
-            "reference_lookup_tool_node": "prepare_reference_lookup",
+            "discover_reference_games": "discover_reference_games",
+        },
+    )
+    graph_builder.add_conditional_edges(
+        "discover_reference_games",
+        route_after_reference_discovery,
+        {
+            "prepare_reference_lookup": "prepare_reference_lookup",
             "mark_reference_lookup_skipped": "mark_reference_lookup_skipped",
         },
     )

@@ -271,7 +271,7 @@ Focus only on intent alignment.
 
 Rules:
 - Diagnose how `concept_statement`, `target_player`, `emotion_goal`, and `reference_titles` align or conflict.
-- Use `reference_contexts` when available to compare the user's stated reference against the public positioning of that game.
+- Use `reference_contexts` when available as public comparison baselines. Contexts with `origin="user"` were supplied by the user; contexts with `origin="recommended"` were automatically discovered and must be described as suggestions, not as the user's stated intent.
 - Use observation before prescription.
 - Do not praise vaguely.
 - Respect the intended genre and emotion instead of forcing a generic standard.
@@ -322,7 +322,7 @@ Focus only on the core loop and differentiation.
 
 Rules:
 - Diagnose the repeatable loop, reward structure, and differentiation points.
-- If `reference_contexts` exist, compare the current loop against the reference loop summaries only as a comparison baseline, not a target to copy.
+- If `reference_contexts` exist, compare the current loop against the reference loop summaries only as a comparison baseline, not a target to copy. Treat automatically discovered contexts (`origin="recommended"`) as suggestions rather than assumed user intent.
 - Separate loop quality from feature listing.
 - Use observation before prescription.
 - If `reward_structure` is missing, acknowledge that uncertainty directly.

@@ -7,8 +7,10 @@ from mentor.domain_classifier import DOMAIN_REJECTION_MESSAGE
 from mentor.graph import (
     classify_domain,
     get_review_graph,
+    prepare_reference_lookup,
     reject_out_of_scope,
     route_after_domain,
+    route_after_reference_discovery,
     route_after_validation,
 )
 from mentor.models import DomainClassificationPayload
@@ -89,14 +91,44 @@ class GraphTest(unittest.TestCase):
     def test_route_after_validation_looks_up_references_when_ready(self) -> None:
         self.assertEqual(
             route_after_validation({"review_ready": True, "reference_titles": ["Hades"]}),
-            "reference_lookup_tool_node",
+            "discover_reference_games",
         )
 
-    def test_route_after_validation_skips_lookup_without_references(self) -> None:
+    def test_route_after_validation_discovers_references_without_user_titles(self) -> None:
         self.assertEqual(
             route_after_validation({"review_ready": True, "reference_titles": []}),
+            "discover_reference_games",
+        )
+
+    def test_route_after_reference_discovery_skips_lookup_without_any_titles(self) -> None:
+        self.assertEqual(
+            route_after_reference_discovery(
+                {"reference_titles": [], "recommended_reference_titles": []}
+            ),
             "mark_reference_lookup_skipped",
         )
+
+    def test_prepare_reference_lookup_keeps_origins_and_limits_recommendations(self) -> None:
+        prepared = prepare_reference_lookup(
+            {
+                "reference_titles": ["Hades"],
+                "recommended_reference_titles": ["Hades", "Dead Cells", "Risk of Rain 2", "Rogue Legacy"],
+            }
+        )
+
+        tool_calls = prepared["messages"][0].tool_calls
+        self.assertEqual([call["id"] for call in tool_calls], [
+            "user-reference-0",
+            "recommended-reference-0",
+            "recommended-reference-1",
+            "recommended-reference-2",
+        ])
+        self.assertEqual([call["args"]["title"] for call in tool_calls], [
+            "Hades",
+            "Dead Cells",
+            "Risk of Rain 2",
+            "Rogue Legacy",
+        ])
 
     def test_review_graph_compiles(self) -> None:
         self.assertIsNotNone(get_review_graph())
@@ -110,6 +142,9 @@ class GraphTest(unittest.TestCase):
 
     def test_review_graph_fans_out_after_reference_lookup(self) -> None:
         edges = graph_edges()
+
+        self.assertIn(("discover_reference_games", "prepare_reference_lookup"), edges)
+        self.assertIn(("discover_reference_games", "mark_reference_lookup_skipped"), edges)
 
         for source in {
             "merge_reference_lookup_results",

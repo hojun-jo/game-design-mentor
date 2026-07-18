@@ -29,10 +29,13 @@ class MentorState(MessagesState, total=False):
     networking_scope: str
     engine_experience: str
     reference_titles: list[str]
+    recommended_reference_titles: list[str]
     reference_contexts: list["ReferenceGameContext"]
     reference_citations: list["ReferenceCitation"]
     reference_lookup_status: Literal["ok", "partial", "failed", "skipped"]
     reference_lookup_notes: list[str]
+    reference_discovery_status: Literal["ok", "empty", "failed", "skipped"]
+    reference_discovery_notes: list[str]
     missing_fields: list[str]
     soft_missing_fields: list[str]
     clarifying_questions: list["ClarifyingQuestion"]
@@ -130,9 +133,12 @@ class EngineRecommendation(BaseModel):
 class ReferenceGameContext(BaseModel):
     title: str = Field(default="")
     matched_name: str = Field(default="")
+    origin: Literal["user", "recommended"] = "user"
     genre_tags: list[str] = Field(default_factory=list)
     core_loop_summary: str = Field(default="")
     notable_positioning: str = Field(default="")
+    similarity_reason: str = Field(default="")
+    difference_summary: str = Field(default="")
     source_notes: list[str] = Field(default_factory=list)
     confidence: Literal["low", "medium", "high"] = "low"
 
@@ -150,6 +156,11 @@ class ReferenceLookupResult(BaseModel):
     context: ReferenceGameContext | None = None
     note: str = Field(default="")
     citations: list[ReferenceCitation] = Field(default_factory=list)
+
+
+class ReferenceDiscoveryPayload(BaseModel):
+    titles: list[str] = Field(default_factory=list)
+    note: str = Field(default="")
 
 
 class ReviewPayload(BaseModel):
@@ -264,6 +275,8 @@ class ReviewResponse(BaseModel):
     reference_citations: list[ReferenceCitation] = Field(default_factory=list)
     reference_lookup_status: Literal["ok", "partial", "failed", "skipped"] = "skipped"
     reference_lookup_notes: list[str] = Field(default_factory=list)
+    reference_discovery_status: Literal["ok", "empty", "failed", "skipped"] = "skipped"
+    reference_discovery_notes: list[str] = Field(default_factory=list)
     diagnosis: DiagnosisResult = Field(default_factory=DiagnosisResult)
     directions: list[DirectionOption] = Field(default_factory=list)
     scope: ScopeResult = Field(default_factory=ScopeResult)

@@ -10,10 +10,11 @@ from .llm import get_openai_client, get_reviewer_base_llm
 from .models import (
     MentorState,
     ReferenceCitation,
+    ReferenceDiscoveryPayload,
     ReferenceGameContext,
     ReferenceLookupResult,
 )
-from .state_utils import clean_text
+from .state_utils import clean_text, normalize_string_list, serialize_brief_for_prompt
 
 
 class ReferenceSummaryPayload(BaseModel):
@@ -24,6 +25,16 @@ class ReferenceSummaryPayload(BaseModel):
     confidence: Literal["low", "medium", "high"] = "low"
     match_status: Literal["ok", "ambiguous", "not_found"] = "not_found"
     note: str = Field(default="")
+
+
+class RecommendedReferenceAssessment(BaseModel):
+    title: str = Field(default="")
+    similarity_reason: str = Field(default="")
+    difference_summary: str = Field(default="")
+
+
+class RecommendedReferenceAssessmentPayload(BaseModel):
+    references: list[RecommendedReferenceAssessment] = Field(default_factory=list)
 
 
 def _get_web_search_model() -> str:
@@ -206,6 +217,118 @@ def _search_reference_summary(title: str) -> tuple[str, list[dict[str, Any]], li
     return output_text, annotations, sources
 
 
+def discover_reference_games(state: MentorState) -> dict:
+    """Find a small, public-web-backed candidate set for the current design brief."""
+    excluded_titles = normalize_string_list(state.get("reference_titles", []))
+    try:
+        response = get_openai_client().responses.create(
+            model=_get_web_search_model(),
+            tools=[{"type": "web_search"}],
+            include=["web_search_call.action.sources"],
+            input=(
+                "Find up to three real video games that are useful comparison references for "
+                "the game design brief below. Search public sources. Prefer games whose player "
+                "experience, repeatable loop, intended emotion, audience, differentiation, or "
+                "platform are genuinely comparable. Do not include the excluded titles, non-games, "
+                "or speculative projects. Return concise factual candidate notes with exact titles.\n\n"
+                f"Design brief:\n{serialize_brief_for_prompt(state)}\n\n"
+                f"Excluded user-provided titles: {excluded_titles}"
+            ),
+        )
+        search_summary, _ = _extract_output_text(response)
+        if not search_summary:
+            return {
+                "recommended_reference_titles": [],
+                "reference_discovery_status": "empty",
+                "reference_discovery_notes": ["공개 웹에서 비교 가능한 레퍼런스 후보를 찾지 못했습니다."],
+            }
+
+        payload = get_reviewer_base_llm().with_structured_output(
+            ReferenceDiscoveryPayload
+        ).invoke(
+            """
+You extract candidate video-game titles for a game design mentor.
+Use only the supplied public-web search summary. Return at most three exact game titles.
+Exclude every user-provided title, uncertain titles, non-games, and duplicates.
+Use Korean only for `note`; titles must retain their common game names.
+
+User-provided titles:
+{excluded_titles}
+
+Search summary:
+{search_summary}
+""".format(
+                excluded_titles=excluded_titles,
+                search_summary=search_summary,
+            )
+        )
+        excluded_keys = {title.casefold() for title in excluded_titles}
+        titles = [
+            title
+            for title in normalize_string_list(payload.titles)
+            if title.casefold() not in excluded_keys
+        ][:3]
+        if not titles:
+            return {
+                "recommended_reference_titles": [],
+                "reference_discovery_status": "empty",
+                "reference_discovery_notes": [
+                    clean_text(payload.note)
+                    or "검증 가능한 레퍼런스 후보를 찾지 못했습니다."
+                ],
+            }
+        return {
+            "recommended_reference_titles": titles,
+            "reference_discovery_status": "ok",
+            "reference_discovery_notes": [clean_text(payload.note)] if clean_text(payload.note) else [],
+        }
+    except Exception:
+        return {
+            "recommended_reference_titles": [],
+            "reference_discovery_status": "failed",
+            "reference_discovery_notes": ["자동 레퍼런스 탐색에 실패했습니다."],
+        }
+
+
+def _assess_recommended_references(
+    state: MentorState,
+    contexts: list[ReferenceGameContext],
+) -> dict[str, RecommendedReferenceAssessment]:
+    if not contexts:
+        return {}
+    payload = get_reviewer_base_llm().with_structured_output(
+        RecommendedReferenceAssessmentPayload
+    ).invoke(
+        """
+You explain why system-discovered game references are useful for a game design mentor.
+Use only the structured brief and verified game contexts below. For every context, write one
+concise Korean sentence for `similarity_reason` and one for `difference_summary`.
+Describe comparison points, not a copying recommendation. Do not invent facts.
+
+Structured brief:
+{brief}
+
+Verified recommended game contexts:
+{contexts}
+""".format(
+            brief=serialize_brief_for_prompt(state),
+            contexts=[context.model_dump() for context in contexts],
+        )
+    )
+    assessments: dict[str, RecommendedReferenceAssessment] = {}
+    for assessment in payload.references:
+        title = clean_text(assessment.title)
+        similarity_reason = clean_text(assessment.similarity_reason)
+        difference_summary = clean_text(assessment.difference_summary)
+        if title and similarity_reason and difference_summary:
+            assessments[title.casefold()] = RecommendedReferenceAssessment(
+                title=title,
+                similarity_reason=similarity_reason,
+                difference_summary=difference_summary,
+            )
+    return assessments
+
+
 def lookup_reference_game_data(title: str) -> ReferenceLookupResult:
     normalized_title = clean_text(title)
     if not normalized_title:
@@ -284,6 +407,11 @@ def merge_reference_lookup_results(state: MentorState) -> dict:
     citations: list[ReferenceCitation] = []
     notes: list[str] = []
     statuses: list[str] = []
+    recommended_contexts: list[ReferenceGameContext] = []
+    user_title_keys = {
+        title.casefold() for title in normalize_string_list(state.get("reference_titles", []))
+    }
+    context_title_keys: set[str] = set()
 
     for message in state.get("messages", []):
         if getattr(message, "type", "") != "tool":
@@ -299,10 +427,58 @@ def merge_reference_lookup_results(state: MentorState) -> dict:
 
         statuses.append(payload.status)
         if payload.context is not None:
-            contexts.append(payload.context)
-        citations.extend(payload.citations)
+            origin = (
+                "recommended"
+                if str(getattr(message, "tool_call_id", "")).startswith("recommended-reference-")
+                else "user"
+            )
+            context = payload.context.model_copy(update={"origin": origin})
+            title_key = clean_text(context.matched_name or context.title).casefold()
+            is_verified_recommendation = (
+                origin == "recommended"
+                and payload.status == "ok"
+                and context.confidence in {"medium", "high"}
+                and bool(payload.citations)
+                and title_key not in user_title_keys
+                and title_key not in context_title_keys
+            )
+            if origin == "user":
+                contexts.append(context)
+                context_title_keys.add(title_key)
+                citations.extend(payload.citations)
+            elif is_verified_recommendation:
+                recommended_contexts.append(context)
+                context_title_keys.add(title_key)
+                citations.extend(payload.citations)
         if payload.note:
             notes.append(payload.note)
+
+    try:
+        assessments = _assess_recommended_references(state, recommended_contexts)
+    except Exception:
+        assessments = {}
+        if recommended_contexts:
+            notes.append("시스템 추천 레퍼런스의 비교 설명을 만들지 못했습니다.")
+
+    for context in recommended_contexts:
+        assessment = next(
+            (
+                assessments.get(clean_text(title).casefold())
+                for title in (context.matched_name, context.title)
+                if clean_text(title).casefold() in assessments
+            ),
+            None,
+        )
+        if assessment is None:
+            continue
+        contexts.append(
+            context.model_copy(
+                update={
+                    "similarity_reason": assessment.similarity_reason,
+                    "difference_summary": assessment.difference_summary,
+                }
+            )
+        )
 
     if not statuses:
         lookup_status = "failed"
@@ -320,9 +496,21 @@ def merge_reference_lookup_results(state: MentorState) -> dict:
         if cleaned and cleaned not in deduped_notes:
             deduped_notes.append(cleaned)
 
+    accepted_reference_titles = {
+        clean_text(name).casefold()
+        for context in contexts
+        for name in (context.title, context.matched_name)
+        if clean_text(name)
+    }
+    visible_citations = [
+        citation
+        for citation in citations
+        if clean_text(citation.reference_title).casefold() in accepted_reference_titles
+    ]
+
     return {
         "reference_contexts": contexts,
-        "reference_citations": _dedupe_citations(citations),
+        "reference_citations": _dedupe_citations(visible_citations),
         "reference_lookup_status": lookup_status,
         "reference_lookup_notes": deduped_notes,
     }

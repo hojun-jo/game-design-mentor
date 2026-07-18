@@ -123,11 +123,16 @@ def render_clarifying_sidebar_context(result: ReviewResponse) -> None:
 def render_reviewed_mode(result: ReviewResponse) -> None:
     st.success("리뷰가 준비됐습니다.")
 
-    if result.reference_summary or result.reference_lookup_status in {"partial", "failed"}:
+    if (
+        result.reference_summary
+        or result.reference_lookup_status in {"partial", "failed"}
+        or result.reference_discovery_status != "skipped"
+    ):
         st.subheader("레퍼런스 참고 요약")
         if result.reference_lookup_status in {"partial", "failed"} and result.reference_lookup_notes:
             st.caption("조회 제한: " + " / ".join(result.reference_lookup_notes))
-        for reference in result.reference_summary:
+
+        def render_reference(reference, show_comparison: bool = False) -> None:
             st.markdown(f"**{reference.title}**")
             if reference.matched_name and reference.matched_name != reference.title:
                 st.write(f"매칭 이름: {reference.matched_name}")
@@ -137,6 +142,10 @@ def render_reviewed_mode(result: ReviewResponse) -> None:
                 st.write(f"핵심 루프: {reference.core_loop_summary}")
             if reference.notable_positioning:
                 st.write(f"비교 포인트: {reference.notable_positioning}")
+            if show_comparison and reference.similarity_reason:
+                st.write(f"유사한 이유: {reference.similarity_reason}")
+            if show_comparison and reference.difference_summary:
+                st.write(f"다른 점: {reference.difference_summary}")
             st.write(f"신뢰도: {reference.confidence}")
             reference_citations = [
                 citation
@@ -150,6 +159,31 @@ def render_reviewed_mode(result: ReviewResponse) -> None:
                     st.markdown(f"- [{label}]({citation.url})")
                     if citation.snippet:
                         st.caption(citation.snippet)
+
+        user_references = [
+            reference
+            for reference in result.reference_summary
+            if reference.origin == "user"
+        ]
+        recommended_references = [
+            reference
+            for reference in result.reference_summary
+            if reference.origin == "recommended"
+        ]
+        if user_references:
+            st.markdown("**사용자가 입력한 레퍼런스**")
+            for reference in user_references:
+                render_reference(reference)
+        if recommended_references:
+            st.markdown("**시스템이 찾은 유사 레퍼런스**")
+            st.caption("자동 추천은 복제 대상이 아닌 비교·학습 기준입니다.")
+            for reference in recommended_references:
+                render_reference(reference, show_comparison=True)
+        elif result.reference_discovery_status != "skipped":
+            notes = result.reference_discovery_notes or [
+                "검증 조건을 충족하는 자동 레퍼런스 추천을 제공하지 못했습니다."
+            ]
+            st.caption("시스템 추천 제한: " + " / ".join(notes))
 
     st.subheader("짧은 진단")
     if result.learning.principles:
