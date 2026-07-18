@@ -14,6 +14,7 @@ def init_session_state() -> None:
     st.session_state.setdefault("clarifying_chat_messages", [])
     st.session_state.setdefault("clarifying_chat_source", "")
     st.session_state.setdefault("review_chat_source", "")
+    st.session_state.setdefault("uploaded_markdown_file", None)
 
 
 def get_raw_input(text_input: str, uploaded_file) -> str | None:

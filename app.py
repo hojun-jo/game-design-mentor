@@ -269,10 +269,26 @@ def _render_intake() -> None:
     _ensure_intake_chat_started()
 
     upload_requested = False
+    uploaded_file = st.session_state.get("uploaded_markdown_file")
     with st.sidebar:
         st.header("파일 업로드")
         st.caption("채팅 대신 Markdown 파일로 시작할 때만 사용합니다.")
-        uploaded_file = st.file_uploader("Markdown 파일 업로드", type=["md"])
+        if uploaded_file is None:
+            selected_file = st.file_uploader(
+                "Markdown 파일 업로드",
+                type=["md"],
+                key="markdown_file_uploader",
+            )
+            if selected_file is not None:
+                st.session_state["uploaded_markdown_file"] = selected_file
+                st.rerun()
+        else:
+            st.success(f"선택된 파일: {uploaded_file.name}")
+            st.caption("파일은 한 번에 1개만 업로드할 수 있습니다.")
+            if st.button("다른 파일 선택", type="secondary"):
+                st.session_state["uploaded_markdown_file"] = None
+                st.session_state.pop("markdown_file_uploader", None)
+                st.rerun()
         upload_requested = st.button("업로드 파일로 리뷰 실행", type="primary")
 
     if upload_requested:
