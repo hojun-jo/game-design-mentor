@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from .domain_classifier import DOMAIN_REJECTION_MESSAGE, classify_game_design_domain
 from .extractor import extract_brief
 from .models import MentorState
 from .reference_tools import lookup_reference_game, merge_reference_lookup_results
@@ -18,7 +19,42 @@ from .reviewer import (
     generate_scope_playtest_review,
     merge_review_guidance,
 )
+from .state_utils import brief_from_state
 from .validation import validate_required_fields_patch
+
+
+def classify_domain(state: MentorState) -> dict:
+    classification = classify_game_design_domain(
+        raw_input=state.get("raw_input", ""),
+        brief=brief_from_state(state),
+    )
+    return {
+        "domain_is_allowed": (
+            classification.is_game_design_related
+            and classification.confidence != "low"
+        ),
+        "domain_confidence": classification.confidence,
+        "domain_reason": classification.reason,
+    }
+
+
+def route_after_domain(state: MentorState) -> Literal[
+    "reject_out_of_scope",
+    "validate_required_fields",
+]:
+    if not state.get("domain_is_allowed", False):
+        return "reject_out_of_scope"
+    return "validate_required_fields"
+
+
+def reject_out_of_scope(_: MentorState) -> dict:
+    return {
+        "mode": "out_of_scope",
+        "final_summary": DOMAIN_REJECTION_MESSAGE,
+        "missing_fields": [],
+        "soft_missing_fields": [],
+        "review_ready": False,
+    }
 
 
 def build_clarifying_response(_: MentorState) -> dict:
@@ -69,6 +105,8 @@ def get_review_graph():
     reference_lookup_tool_node = ToolNode([lookup_reference_game], name="reference_lookup_tool_node")
     graph_builder = StateGraph(MentorState)
     graph_builder.add_node("extract_brief", extract_brief)
+    graph_builder.add_node("classify_domain", classify_domain)
+    graph_builder.add_node("reject_out_of_scope", reject_out_of_scope)
     graph_builder.add_node("validate_required_fields", validate_required_fields_patch)
     graph_builder.add_node("build_clarifying_response", build_clarifying_response)
     graph_builder.add_node("prepare_reference_lookup", prepare_reference_lookup)
@@ -84,7 +122,15 @@ def get_review_graph():
     graph_builder.add_node("build_review_response", build_review_response)
 
     graph_builder.add_edge(START, "extract_brief")
-    graph_builder.add_edge("extract_brief", "validate_required_fields")
+    graph_builder.add_edge("extract_brief", "classify_domain")
+    graph_builder.add_conditional_edges(
+        "classify_domain",
+        route_after_domain,
+        {
+            "reject_out_of_scope": "reject_out_of_scope",
+            "validate_required_fields": "validate_required_fields",
+        },
+    )
     graph_builder.add_conditional_edges(
         "validate_required_fields",
         route_after_validation,
@@ -94,6 +140,7 @@ def get_review_graph():
             "mark_reference_lookup_skipped": "mark_reference_lookup_skipped",
         },
     )
+    graph_builder.add_edge("reject_out_of_scope", END)
     graph_builder.add_edge("build_clarifying_response", END)
     graph_builder.add_edge("prepare_reference_lookup", "reference_lookup_tool_node")
     graph_builder.add_edge("reference_lookup_tool_node", "merge_reference_lookup_results")

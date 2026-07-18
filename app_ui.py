@@ -62,6 +62,13 @@ def render_clarifying_mode(result: ReviewResponse) -> None:
     st.info("아래 보완 대화에서 답변하거나, 질문의 의미와 추천 방향을 물어보세요.")
 
 
+def render_out_of_scope_mode(result: ReviewResponse) -> None:
+    st.error(result.final_summary or "게임 기획과 관련된 내용만 리뷰할 수 있습니다.")
+    if result.domain_reason:
+        st.caption("분류 근거: " + result.domain_reason)
+    st.info("게임 콘셉트, 플레이어, 코어 루프, 보상 구조, MVP 목표 중 하나 이상을 포함해 다시 입력해 주세요.")
+
+
 def render_chat_workspace(
     title: str | None,
     caption: str | None,

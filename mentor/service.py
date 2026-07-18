@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 from langchain_core.messages import HumanMessage
 
+from .domain_classifier import DOMAIN_REJECTION_MESSAGE, classify_follow_up_domain
 from .graph import get_review_graph
 from .llm_stream import LLMOutputCallback, llm_output_context
 from .models import (
@@ -26,6 +27,8 @@ ProgressCallback = Callable[[str], None]
 
 GRAPH_PROGRESS_MESSAGES: dict[str, str] = {
     "extract_brief": "기획 초안에서 콘셉트, 감정 목표, 코어 루프를 구조화했습니다.",
+    "classify_domain": "입력이 게임 기획 리뷰 대상인지 확인했습니다.",
+    "reject_out_of_scope": "게임 기획과 관련 없는 입력으로 분류해 리뷰를 중단했습니다.",
     "validate_required_fields": "리뷰에 필요한 핵심 정보가 충분한지 확인했습니다.",
     "build_clarifying_response": "리뷰 전에 확인할 보완 질문을 준비했습니다.",
     "prepare_reference_lookup": "언급된 레퍼런스 게임을 조회할 준비를 했습니다.",
@@ -42,7 +45,8 @@ GRAPH_PROGRESS_MESSAGES: dict[str, str] = {
 }
 
 GRAPH_NEXT_PROGRESS_MESSAGES: dict[str, str] = {
-    "extract_brief": "필수 정보와 권장 입력의 누락 여부를 확인하고 있습니다.",
+    "extract_brief": "게임 기획 리뷰 대상인지 확인하고 있습니다.",
+    "classify_domain": "필수 정보와 권장 입력의 누락 여부를 확인하고 있습니다.",
     "validate_required_fields": "리뷰 가능 여부에 따라 다음 단계를 고르고 있습니다.",
     "prepare_reference_lookup": "레퍼런스 게임의 공개 정보를 확인하고 있습니다.",
     "reference_lookup_tool_node": "레퍼런스 결과를 리뷰 컨텍스트에 합치고 있습니다.",
@@ -74,6 +78,23 @@ def _review_context_for_chat(result: ReviewResponse) -> dict:
         "mentor_questions": [question.model_dump() for question in result.questions],
         "final_summary": result.final_summary,
     }
+
+
+def _clarifying_context_for_domain(result: ReviewResponse) -> dict:
+    return {
+        "mode": result.mode,
+        "brief": result.brief.model_dump(),
+        "missing_fields": result.missing_fields,
+        "soft_missing_fields": result.soft_missing_fields,
+        "pending_questions": [question.model_dump() for question in result.questions],
+    }
+
+
+def _domain_allows_follow_up(classification) -> bool:
+    return (
+        classification.is_game_design_related
+        and classification.confidence != "low"
+    )
 
 
 def _append_review_follow_up(raw_input: str, revision_note: str) -> str:
@@ -117,7 +138,7 @@ def _build_response(state: MentorState) -> ReviewResponse:
             "direction_options": [],
             "reflection_summary": "",
             "next_self_check_question": "",
-            "final_summary": "",
+            "final_summary": state.get("final_summary", ""),
         }
     )
     return ReviewResponse(
@@ -160,6 +181,9 @@ def _build_response(state: MentorState) -> ReviewResponse:
         final_summary=normalized_review["final_summary"],
         missing_fields=state.get("missing_fields", []),
         soft_missing_fields=state.get("soft_missing_fields", []),
+        domain_is_allowed=state.get("domain_is_allowed", False),
+        domain_confidence=state.get("domain_confidence", "low"),
+        domain_reason=state.get("domain_reason", ""),
         raw_input=state.get("raw_input", ""),
     )
 
@@ -227,6 +251,23 @@ def answer_clarifying_chat(
 
     _report_progress(
         progress_callback,
+        "보완 메시지가 게임 기획 대화 범위 안인지 확인하고 있습니다.",
+    )
+    with llm_output_context(output_callback):
+        domain_classification = classify_follow_up_domain(
+            user_message=message,
+            interaction_context=_clarifying_context_for_domain(result),
+            chat_history=chat_history,
+        )
+    if not _domain_allows_follow_up(domain_classification):
+        _report_progress(
+            progress_callback,
+            "게임 기획과 관련 없는 보완 메시지로 분류해 응답을 중단했습니다.",
+        )
+        return DOMAIN_REJECTION_MESSAGE, None
+
+    _report_progress(
+        progress_callback,
         "보완 메시지가 질문인지, 리뷰를 계속할 수 있는 답변인지 분류하고 있습니다.",
     )
     with llm_output_context(output_callback):
@@ -262,6 +303,23 @@ def answer_review_chat(
     message = clean_text(user_message)
     if not message:
         raise ValueError("후속 질문이나 정정 내용을 입력해 주세요.")
+
+    _report_progress(
+        progress_callback,
+        "후속 메시지가 게임 기획 대화 범위 안인지 확인하고 있습니다.",
+    )
+    with llm_output_context(output_callback):
+        domain_classification = classify_follow_up_domain(
+            user_message=message,
+            interaction_context=_review_context_for_chat(result),
+            chat_history=chat_history,
+        )
+    if not _domain_allows_follow_up(domain_classification):
+        _report_progress(
+            progress_callback,
+            "게임 기획과 관련 없는 후속 메시지로 분류해 응답을 중단했습니다.",
+        )
+        return DOMAIN_REJECTION_MESSAGE, None
 
     _report_progress(
         progress_callback,

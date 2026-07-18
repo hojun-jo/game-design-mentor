@@ -4,7 +4,7 @@ import json
 
 from .llm import get_reviewer_base_llm
 from .llm_stream import get_stream_config, report_structured_output
-from .models import DomainClassificationPayload, StructuredBrief
+from .models import ChatMessage, DomainClassificationPayload, StructuredBrief
 from .validation import is_game_design_related
 
 DOMAIN_REJECTION_MESSAGE = (
@@ -65,7 +65,62 @@ Original user input:
     )
 
 
-def ensure_game_design_domain(raw_input: str, brief: StructuredBrief) -> None:
-    classification = classify_game_design_domain(raw_input, brief)
-    if not classification.is_game_design_related or classification.confidence == "low":
-        raise ValueError(DOMAIN_REJECTION_MESSAGE)
+def _jsonable_chat_history(chat_history: list[ChatMessage]) -> list[dict]:
+    return [message.model_dump() for message in chat_history[-8:]]
+
+
+def classify_follow_up_domain(
+    user_message: str,
+    interaction_context: dict,
+    chat_history: list[ChatMessage],
+) -> DomainClassificationPayload:
+    prompt = f"""
+You classify whether the latest user message is in scope for a game design mentor app conversation.
+Return only the structured classification.
+
+The app already has an active game design review or clarification flow.
+Use the current context only to understand references like "why", "that point", "the scope", or "your question".
+
+Accept as in scope when the latest user message:
+- answers a pending game design clarification question
+- asks what a pending clarification question means or asks for examples
+- asks about the current review, its rationale, tradeoffs, scope, core loop, player intent, or playtest plan
+- corrects or adds details about the current game design brief
+- asks for help applying the review to this game design
+
+Reject as out of scope when the latest user message is mainly about:
+- unrelated general knowledge, weather, coding, business, hiring, schoolwork, personal advice, or non-game product design
+- a new non-game document or task
+- game news, lore, marketing, or entertainment discussion that does not ask for game design feedback
+
+Classification rules:
+- Classify the latest user message, not the whole history.
+- Do not accept an unrelated latest message only because the existing context is game-related.
+- Short context-dependent messages like "왜?", "예시 줘", or "그 범위는 왜 줄여?" are in scope if they naturally refer to the active review or pending question.
+- Use confidence="low" when the latest message could plausibly be unrelated.
+- If confidence is low, set is_game_design_related=false.
+
+Current interaction context:
+{json.dumps(interaction_context, ensure_ascii=False, indent=2)}
+
+Recent chat history:
+{json.dumps(_jsonable_chat_history(chat_history), ensure_ascii=False, indent=2)}
+
+Latest user message:
+{user_message}
+""".strip()
+
+    classifier = get_reviewer_base_llm().with_structured_output(
+        DomainClassificationPayload
+    )
+    config = get_stream_config("대화 범위 확인 중")
+    if config is None:
+        payload = classifier.invoke(prompt)
+    else:
+        payload = classifier.invoke(prompt, config=config)
+    report_structured_output("대화 범위 확인 중", payload)
+    return DomainClassificationPayload(
+        is_game_design_related=payload.is_game_design_related,
+        confidence=payload.confidence,
+        reason=payload.reason.strip(),
+    )

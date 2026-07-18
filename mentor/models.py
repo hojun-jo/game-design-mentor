@@ -8,7 +8,10 @@ from pydantic import BaseModel, Field
 
 class MentorState(MessagesState, total=False):
     raw_input: str
-    mode: Literal["clarifying", "reviewed"]
+    mode: Literal["clarifying", "reviewed", "out_of_scope"]
+    domain_is_allowed: bool
+    domain_confidence: Literal["low", "medium", "high"]
+    domain_reason: str
     concept_statement: str
     target_player: str
     emotion_goal: str
@@ -225,7 +228,7 @@ class LearningResult(BaseModel):
 
 
 class ReviewResponse(BaseModel):
-    mode: Literal["clarifying", "reviewed"]
+    mode: Literal["clarifying", "reviewed", "out_of_scope"]
     questions: list[ClarifyingQuestion] = Field(default_factory=list)
     brief: StructuredBrief = Field(default_factory=StructuredBrief)
     reference_summary: list[ReferenceGameContext] = Field(default_factory=list)
@@ -240,4 +243,7 @@ class ReviewResponse(BaseModel):
     final_summary: str = Field(default="")
     missing_fields: list[str] = Field(default_factory=list)
     soft_missing_fields: list[str] = Field(default_factory=list)
+    domain_is_allowed: bool = False
+    domain_confidence: Literal["low", "medium", "high"] = "low"
+    domain_reason: str = Field(default="")
     raw_input: str = Field(default="")

@@ -13,6 +13,7 @@ from app_ui import (
     render_chat_workspace,
     render_clarifying_mode,
     render_clarifying_sidebar_context,
+    render_out_of_scope_mode,
     render_review_sidebar_context,
     render_reviewed_mode,
 )
@@ -113,6 +114,18 @@ def _append_clarifying_chat_message(role: str, content: str) -> None:
     message = ChatMessage(role=role, content=content)
     st.session_state["clarifying_chat_messages"].append(message)
     st.session_state["conversation_messages"].append(message)
+
+
+def _reset_review_state() -> None:
+    st.session_state["review_result"] = None
+    st.session_state["source_text"] = ""
+    st.session_state["conversation_messages"] = []
+    st.session_state["intake_chat_messages"] = []
+    st.session_state["review_chat_messages"] = []
+    st.session_state["clarifying_chat_messages"] = []
+    st.session_state["clarifying_chat_source"] = ""
+    st.session_state["review_chat_source"] = ""
+    st.session_state["uploaded_markdown_file"] = None
 
 
 def _ensure_intake_chat_started() -> None:
@@ -325,6 +338,13 @@ def _render_intake() -> None:
 
 
 def _render_result(result: ReviewResponse) -> None:
+    if result.mode == "out_of_scope":
+        render_out_of_scope_mode(result)
+        if st.button("새 기획 초안 입력", type="primary"):
+            _reset_review_state()
+            st.rerun()
+        return
+
     if result.mode == "clarifying":
         _ensure_clarifying_chat_started(result)
         render_clarifying_sidebar_context(result)

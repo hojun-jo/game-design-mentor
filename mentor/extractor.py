@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .domain_classifier import ensure_game_design_domain
 from .llm import get_extractor_llm
 from .llm_stream import get_stream_config, report_structured_output
 from .models import MentorState
@@ -56,6 +55,4 @@ User draft:
     else:
         extracted = get_extractor_llm().invoke(prompt, config=config)
     report_structured_output("브리프 추출 중", extracted)
-    normalized = normalize_brief(extracted)
-    ensure_game_design_domain(raw_input, normalized)
-    return normalized.model_dump()
+    return normalize_brief(extracted).model_dump()
